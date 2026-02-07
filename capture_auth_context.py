@@ -83,11 +83,18 @@ def main() -> int:
     # Captured data
     captured_auth = None
     captured_tokens = None
+    request_count = 0  # Debug counter
 
     def on_request(request):
-        nonlocal captured_auth
+        nonlocal captured_auth, request_count
         try:
             url = request.url
+            request_count += 1
+            
+            # Debug: Log every 10th request
+            if request_count % 10 == 0:
+                print(f"[DEBUG] Seen {request_count} requests so far...")
+            
             # Capture either playback auth or allchannels request
             if (TARGET_SUBSTRING in url or ALLCHANNELS_MARKER in url) and not captured_auth:
                 headers = request.headers
@@ -225,11 +232,16 @@ def main() -> int:
 
         # Wait for auth requests
         print(f"[INFO] Waiting for auth requests...")
+        print(f"[DEBUG] Total requests seen so far: {request_count}")
         timeout_at = time.time() + 30
         while time.time() < timeout_at:
             if captured_auth:  # Don't require tokens
                 break
             time.sleep(0.5)
+        
+        print(f"[DEBUG] Final request count: {request_count}")
+        if not captured_auth:
+            print(f"[WARNING] No auth captured after seeing {request_count} requests total")
 
         # Save results
         if captured_auth:
