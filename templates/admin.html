@@ -100,7 +100,14 @@
                 <button class="btn" id="refresh-btn" onclick="triggerRefresh()" {% if refresh_running %}disabled{% endif %}>
                     🔄 Refresh Now
                 </button>
+                <button class="btn btn-danger" id="reauth-btn" onclick="triggerReauth()" {% if refresh_running %}disabled{% endif %}>
+                    🔑 Re-Authenticate
+                </button>
                 <button class="btn" onclick="loadLogs()">📄 Refresh Logs</button>
+            </div>
+            <div class="actions" style="margin-top: 8px;">
+                <button class="btn btn-sm" onclick="clearOutputs()">🗑️ Clear Output Files</button>
+                <button class="btn btn-sm" onclick="clearLogs()">🧹 Clear Logs</button>
             </div>
         </div>
 
@@ -118,9 +125,7 @@
             const input = document.getElementById(inputId);
             input.select();
             navigator.clipboard.writeText(input.value);
-            const toast = document.getElementById('toast');
-            toast.style.display = 'block';
-            setTimeout(() => toast.style.display = 'none', 1500);
+            showToast('Copied!');
         }
 
         function triggerRefresh() {
@@ -138,6 +143,53 @@
                     btn.textContent = '🔄 Refresh Now';
                     alert('Error: ' + e);
                 });
+        }
+
+        function triggerReauth() {
+            if (!confirm('This will delete your saved auth session and re-login to DirecTV.\n\nContinue?')) return;
+            const btn = document.getElementById('reauth-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Re-authenticating...';
+            fetch('/api/reauth', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    showToast(d.message || 'Re-auth started');
+                    pollStatus();
+                })
+                .catch(e => {
+                    btn.disabled = false;
+                    btn.textContent = '🔑 Re-Authenticate';
+                    alert('Error: ' + e);
+                });
+        }
+
+        function clearOutputs() {
+            if (!confirm('Delete all generated output files (EPG, M3U, etc.)?\n\nYou\'ll need to run a refresh to regenerate them.')) return;
+            fetch('/api/clear-outputs', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    showToast(d.message || 'Cleared');
+                    setTimeout(() => location.reload(), 1000);
+                })
+                .catch(e => alert('Error: ' + e));
+        }
+
+        function clearLogs() {
+            if (!confirm('Clear all log entries?')) return;
+            fetch('/api/clear-logs', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    showToast(d.message || 'Cleared');
+                    loadLogs();
+                })
+                .catch(e => alert('Error: ' + e));
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.style.display = 'block';
+            setTimeout(() => toast.style.display = 'none', 2500);
         }
 
         function pollStatus() {

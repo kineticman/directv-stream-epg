@@ -306,6 +306,85 @@ def api_refresh():
     return jsonify({'message': 'Refresh started'})
 
 
+@app.route('/api/reauth', methods=['POST'])
+def api_reauth():
+    """Delete auth context and re-capture credentials"""
+    if refresh_running:
+        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
+
+    logger.info("Re-auth triggered via web interface")
+
+    # Delete auth files
+    deleted = []
+    for name in ['auth_context.json', 'storage_state.json', 'tokens.json']:
+        p = DATA_DIR / name
+        if p.exists():
+            p.unlink()
+            deleted.append(name)
+            logger.info(f"Deleted: {p}")
+
+    # Also clean debug screenshots
+    for p in DATA_DIR.glob('debug_*.png'):
+        p.unlink()
+
+    if not deleted:
+        msg = 'No auth files found — will capture fresh on next refresh'
+    else:
+        msg = f'Deleted: {", ".join(deleted)}'
+
+    # Log it
+    with open(LOG_FILE, 'a') as f:
+        f.write(f"\n{'='*80}\n")
+        f.write(f"Re-auth triggered: {datetime.now().isoformat()}\n")
+        f.write(f"{msg}\n")
+        f.write(f"{'='*80}\n\n")
+
+    # Kick off a full refresh (which will re-capture auth first)
+    import threading
+    thread = threading.Thread(target=run_refresh)
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({'message': msg + ' — refresh started'})
+
+
+@app.route('/api/clear-outputs', methods=['POST'])
+def api_clear_outputs():
+    """Delete generated output files"""
+    if refresh_running:
+        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
+
+    logger.info("Clear outputs triggered via web interface")
+
+    deleted = []
+    for p in OUT_DIR.iterdir():
+        if p.is_file() and p.name != '.gitkeep':
+            p.unlink()
+            deleted.append(p.name)
+            logger.info(f"Deleted: {p}")
+
+    if not deleted:
+        msg = 'No output files to delete'
+    else:
+        msg = f'Deleted {len(deleted)} file(s): {", ".join(deleted)}'
+
+    with open(LOG_FILE, 'a') as f:
+        f.write(f"\n[{datetime.now().isoformat()}] Clear outputs: {msg}\n")
+
+    return jsonify({'message': msg})
+
+
+@app.route('/api/clear-logs', methods=['POST'])
+def api_clear_logs():
+    """Truncate the refresh log"""
+    if refresh_running:
+        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
+
+    LOG_FILE.write_text('')
+    logger.info("Logs cleared via web interface")
+    return jsonify({'message': 'Logs cleared'})
+
+
 @app.route('/files/<path:filename>')
 def serve_file(filename):
     """Serve output files"""

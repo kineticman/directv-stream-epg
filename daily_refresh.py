@@ -44,6 +44,13 @@ def _run(cmd: List[str], *, cwd: str | None = None) -> None:
         raise SystemExit(p.returncode)
 
 
+def _try_run(cmd: List[str], *, cwd: str | None = None) -> int:
+    """Run a command and return exit code (0 = success) without dying."""
+    log("CMD: " + " ".join(cmd))
+    p = subprocess.run(cmd, cwd=cwd)
+    return p.returncode
+
+
 def _as_int(v: str | None, default: int | None = None) -> int | None:
     if v is None:
         return default
@@ -187,11 +194,54 @@ def main(argv: List[str]) -> int:
     else:
         log(f"Using existing auth_context: {auth_context}")
 
+    # --- Helper to (re-)capture auth ---
+    def recapture_auth() -> bool:
+        """Delete stale auth and re-capture. Returns True on success."""
+        username = os.getenv("DTV_EMAIL", "") or os.getenv("DTV_USERNAME", "")
+        password = os.getenv("DTV_PASSWORD", "")
+        if not username or not password:
+            log("Cannot re-capture auth: no credentials in environment")
+            return False
+
+        if auth_context.exists():
+            auth_context.unlink()
+            log("Deleted stale auth_context.json")
+
+        log("=== capture_auth_context (re-auth) ===")
+        cmd = [py, str(repo / "capture_auth_context.py"),
+               "--out-path", str(auth_context),
+               "--auto-login",
+               "--no-screenshots"]
+        if args.headless:
+            cmd.append("--headless")
+        if args.browser:
+            cmd += ["--browser", args.browser]
+        rc = _try_run(cmd)
+        if rc == 0 and auth_context.exists():
+            log("Re-auth succeeded")
+            return True
+        log(f"Re-auth failed (exit code {rc})")
+        return False
+
+    # --- fetch_allchannels_map (with auto-heal on stale auth) ---
     log("=== fetch_allchannels_map ===")
-    _run([py, str(repo / "fetch_allchannels_map.py"),
-          "--auth-context", str(auth_context),
-          "--out-dir", str(data_dir),
-          "--out-csv", str(allchannels_csv)])
+    rc = _try_run([py, str(repo / "fetch_allchannels_map.py"),
+                   "--auth-context", str(auth_context),
+                   "--out-dir", str(data_dir),
+                   "--out-csv", str(allchannels_csv)])
+
+    if rc != 0:
+        log(f"fetch_allchannels_map failed (exit code {rc}) — auth may be stale")
+        log("Attempting re-authentication...")
+        if recapture_auth():
+            log("=== fetch_allchannels_map (retry) ===")
+            _run([py, str(repo / "fetch_allchannels_map.py"),
+                  "--auth-context", str(auth_context),
+                  "--out-dir", str(data_dir),
+                  "--out-csv", str(allchannels_csv)])
+        else:
+            log("Re-auth failed — cannot continue")
+            return 1
 
     log(f"OK: fetch_allchannels_map ({time.time() - t0:.1f}s)")
 
