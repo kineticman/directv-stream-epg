@@ -6,24 +6,31 @@ services:
     container_name: directv-epg
     restart: unless-stopped
     
-    # Load environment variables from .env file
-    env_file:
-      - .env
-    
     ports:
-      - "8675:8675"
+      - "${WEB_PORT:-8675}:${WEB_PORT:-8675}"
     
     volumes:
       # Persistent data (auth, channel lists, schedule cache)
       - ./data:/app/data
       # Output files (XMLTV + M3U)
       - ./out:/app/out
+      # Logs
+      - ./logs:/var/log/directv
     
-    # Default command with auto-login enabled
-    command: python daily_refresh.py --auto-login --headless --browser chromium
+    environment:
+      # REQUIRED: Your DirecTV credentials
+      - DTV_USERNAME=${DTV_USERNAME}
+      - DTV_PASSWORD=${DTV_PASSWORD}
+      # REQUIRED: Your server's LAN IP (for copy-paste URLs)
+      - HOST_IP=${HOST_IP}
+      # Optional: Customize these
+      - WEB_PORT=${WEB_PORT:-8675}
+      - REFRESH_HOUR=${REFRESH_HOUR:-3}
+      - REFRESH_MINUTE=${REFRESH_MINUTE:-0}
+      - TZ=${TZ:-America/New_York}
     
     healthcheck:
-      test: ["CMD", "test", "-f", "/app/out/dtv_epg.xml"]
+      test: ["CMD", "curl", "-f", "http://localhost:${WEB_PORT:-8675}/health"]
       interval: 30s
       timeout: 10s
       retries: 3
