@@ -71,7 +71,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--window-hours", type=int, default=None, help="ALIAS for --schedule-window-hours")
 
     # Existing schedule flags (kept for backward compatibility)
-    ap.add_argument("--schedule-days", type=int, default=1, help="How many days to fetch schedule for (default: 1)")
+    ap.add_argument("--schedule-days", type=int, default=2, help="How many days to fetch schedule for (default: 2)")
     ap.add_argument("--schedule-window-hours", type=int, default=6, help="Guide window hours per request (default: 6)")
     ap.add_argument("--schedule-max-channels", type=int, default=40, help="Max channels per request batch (default: 40)")
     ap.add_argument("--schedule-timeout", type=int, default=30, help="HTTP timeout seconds (default: 30)")
@@ -154,7 +154,8 @@ def main(argv: List[str]) -> int:
             log("=== capture_auth_context (auto-login) ===")
             cmd = [py, str(repo / "capture_auth_context.py"),
                    "--out-path", str(auth_context),
-                   "--auto-login"]
+                   "--auto-login",
+                   "--no-screenshots"]
             if args.headless:
                 cmd.append("--headless")
             if args.browser:
