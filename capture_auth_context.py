@@ -178,6 +178,14 @@ def main() -> int:
             print(f"[DEBUG] Login page URL: {current_url}")
 
             try:
+                # Verify credentials are actually set
+                if not username or not password:
+                    print(f"[ERROR] Credentials not set! username={bool(username)} password={bool(password)}")
+                    browser.close()
+                    return 1
+                
+                print(f"[DEBUG] Credentials check: username length={len(username)}, password length={len(password)}")
+                
                 # Fill email
                 print(f"[DEBUG] Looking for email field...")
                 email_input = page.locator('input[type="email"]').first
@@ -194,9 +202,9 @@ def main() -> int:
                 # Press Enter to go to password page
                 from playwright.sync_api import Keyboard
                 print(f"[DEBUG] Pressing Enter on email field...")
-                email_input.press("Enter")
+                page.keyboard.press("Enter")
                 print(f"[DEBUG] Waiting for password page to load...")
-                time.sleep(2)
+                time.sleep(3)  # Wait longer for password page
                 
                 # Check what page we're on
                 after_email_url = page.url
@@ -215,24 +223,23 @@ def main() -> int:
                 filled_pass = pass_input.input_value()
                 print(f"[DEBUG] Password field has value: {bool(filled_pass)} (length: {len(filled_pass)})")
 
-                # Try clicking the Sign In button instead of pressing Enter
+                # Wait for Sign In button to become visible
                 print(f"[DEBUG] Looking for Sign In button...")
                 try:
                     sign_in_button = page.locator('button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]').first
-                    button_visible = sign_in_button.is_visible()
-                    print(f"[DEBUG] Sign In button visible: {button_visible}")
                     
-                    if button_visible:
-                        sign_in_button.click()
-                        print(f"[INFO] Clicked Sign In button")
-                    else:
-                        print(f"[WARNING] Button exists but not visible, pressing Enter instead")
-                        pass_input.press("Enter")
-                        print(f"[INFO] Pressed Enter on password")
+                    # Wait for button to be visible (it might be loading)
+                    print(f"[DEBUG] Waiting for button to be visible...")
+                    sign_in_button.wait_for(state="visible", timeout=5000)
+                    print(f"[DEBUG] Sign In button is now visible")
+                    
+                    sign_in_button.click()
+                    print(f"[INFO] Clicked Sign In button")
                 except Exception as btn_error:
                     # Fallback to pressing Enter
-                    print(f"[WARNING] Could not find/click button: {btn_error}")
-                    pass_input.press("Enter")
+                    print(f"[WARNING] Button issue: {btn_error}")
+                    print(f"[DEBUG] Trying Enter key as fallback...")
+                    page.keyboard.press("Enter")
                     print(f"[INFO] Pressed Enter on password (fallback)")
                 
                 print(f"[INFO] Submitted login")
