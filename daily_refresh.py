@@ -123,6 +123,23 @@ def main(argv: List[str]) -> int:
 
     t0 = time.time()
 
+    # Step 0: Capture auth context if it doesn't exist or if --auto-login is specified
+    if not auth_context.exists() or args.auto_login:
+        log("=== capture_auth_context ===")
+        cmd = [py, str(repo / "capture_auth_context.py"),
+               "--out-path", str(auth_context)]
+        if args.auto_login:
+            cmd.append("--auto-login")
+        if args.headless:
+            cmd.append("--headless")
+        if args.browser:
+            cmd += ["--browser", args.browser]
+        _run(cmd)
+        log(f"OK: capture_auth_context ({time.time() - t0:.1f}s)")
+        t0 = time.time()
+    else:
+        log(f"Using existing auth_context: {auth_context}")
+
     log("=== fetch_allchannels_map ===")
     _run([py, str(repo / "fetch_allchannels_map.py"),
           "--auth-context", str(auth_context),
