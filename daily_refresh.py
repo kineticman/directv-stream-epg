@@ -96,7 +96,7 @@ def main() -> int:
     print(f"[{ts()}] Python: {py}")
 
     # 1) Auth capture - outputs to /data
-    cap_args = [py, str(capture), "--headless", "--out-dir", str(data_dir)]
+    cap_args = [py, str(capture), "--headless", "--out-path", str(auth_context), "--auto-login"]
     if args.browser:
         cap_args.extend(["--browser", args.browser])
 
