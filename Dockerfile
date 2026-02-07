@@ -57,8 +57,12 @@ RUN playwright install firefox || true
 # Copy application code
 COPY . .
 
-# Create data and output directories
-RUN mkdir -p /app/data /app/out
+# Create data, output, and log directories
+RUN mkdir -p /app/data /app/out /var/log/directv /app/templates
+
+# Copy entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
@@ -67,5 +71,5 @@ ENV PYTHONUNBUFFERED=1
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:${WEB_PORT:-8675}/health || exit 1
 
-# Default command (can be overridden)
-CMD ["python", "daily_refresh.py"]
+# Default command - runs webapp with scheduler
+ENTRYPOINT ["/entrypoint.sh"]

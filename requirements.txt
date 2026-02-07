@@ -1,3 +1,15 @@
+# Browser automation
 playwright
 selenium
+
+# HTTP client
 requests
+
+# Web framework
+flask==3.0.0
+
+# Scheduler
+APScheduler==3.10.4
+
+# Timezone support
+pytz
