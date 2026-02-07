@@ -62,8 +62,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     ap.add_argument("--python", default=sys.executable, help="Python interpreter to use for sub-scripts")
 
     # Login / browser (if fetch_dtv_schedule.py supports it)
-    ap.add_argument("--auto-login", action="store_true", help="Attempt automated login if needed (passed through)")
-    ap.add_argument("--headless", action="store_true", help="Run browser headless if login is needed (passed through)")
+    ap.add_argument("--auto-login", action="store_true", default=True, help="Attempt automated login if needed (default: True)")
+    ap.add_argument("--headless", action="store_true", default=True, help="Run browser headless if login is needed (default: True)")
     ap.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default="chromium", help="Browser for login (default: chromium)")
 
     # Friendly aliases
