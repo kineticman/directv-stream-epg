@@ -2,22 +2,15 @@
 """
 capture_auth_context.py
 
-Interactive helper to capture DirecTV Stream "allchannels" request context
-(Authorization bearer token, cookies, request URL/params, user-agent).
-
-Supports both manual login (non-headless) and auto-login (with credentials).
+100% headless DirecTV Stream auth capture with auto-login.
+Captures OAuth tokens and authorization headers for API access.
 
 Usage:
-  Manual login (opens browser window):
-    python capture_auth_context.py --out-path ./data/auth_context.json --no-headless
-  
-  Auto-login (headless, requires credentials):
-    export DTV_EMAIL="your-email@example.com"
-    export DTV_PASSWORD="your-password"
-    python capture_auth_context.py --out-path ./data/auth_context.json --headless --auto-login
-
-IMPORTANT: DirecTV blocks Firefox, so we always spoof Chrome user-agent.
+    set DTV_USERNAME=your-email@example.com
+    set DTV_PASSWORD=your-password
+    python capture_auth_context.py --headless
 """
+
 from __future__ import annotations
 
 import argparse
@@ -26,181 +19,242 @@ import os
 import sys
 import time
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs, urlunparse
+from typing import Any, Dict, Optional
 
+# Network request markers
+TARGET_SUBSTRING = "/right/authorization/channel/v1"
 ALLCHANNELS_MARKER = "/discovery/metadata/channel/v5/service/allchannels"
-
-# DirecTV blocks Firefox, always use Chrome UA
-CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-
-def _normalize_params(qs: dict[str, list[str]]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, vals in qs.items():
-        if not vals:
-            continue
-        out[k] = vals[-1]
-    return out
+TOKENGO_SUBSTRING = "/authn-tokengo/v3/tokens"
 
 
 def main() -> int:
+    # Load .env file if it exists
+    env_file = Path(".env")
+    if env_file.exists():
+        print(f"[INFO] Loading .env file")
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key.strip()] = value.strip()
+    
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out-path", required=True, help="Where to write auth_context.json")
-    ap.add_argument("--browser", choices=["chromium", "firefox", "webkit"], default="chromium")
-    head = ap.add_mutually_exclusive_group()
-    head.add_argument("--headless", action="store_true", help="Run browser headless")
-    head.add_argument("--no-headless", action="store_true", help="Run browser with a visible window (default)")
-    ap.add_argument("--timeout", type=int, default=180, help="Seconds to wait for allchannels request")
-    ap.add_argument("--auto-login", action="store_true", help="Attempt automated login (requires DTV_EMAIL and DTV_PASSWORD env vars)")
+    ap.add_argument("--out-path", help="Output path for auth_context.json (if not set, uses --out-dir)")
+    ap.add_argument("--out-dir", default="out", help="Output directory (default: out)")
+    ap.add_argument("--headless", action="store_true", default=True, help="Run headless (default: True)")
+    ap.add_argument("--browser", default="firefox", choices=["chromium", "firefox", "webkit"])
+    ap.add_argument("--timeout", type=int, default=60, help="Timeout in seconds")
+    ap.add_argument("--auto-login", action="store_true", default=True, help="Auto-login (default: True)")
     args = ap.parse_args()
 
-    out_path = Path(args.out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Support both --out-path and --out-dir for backward compatibility
+    if args.out_path:
+        auth_context_path = Path(args.out_path)
+        out_dir = auth_context_path.parent
+    else:
+        out_dir = Path(args.out_dir)
+        auth_context_path = out_dir / "auth_context.json"
     
-    storage_state_path = out_path.parent / "storage_state.json"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Check for credentials if auto-login requested
-    # Accept both DTV_EMAIL and DTV_USERNAME for backward compatibility
-    email = os.environ.get("DTV_EMAIL", "").strip() or os.environ.get("DTV_USERNAME", "").strip()
-    password = os.environ.get("DTV_PASSWORD", "").strip()
-    
-    if args.auto_login and (not email or not password):
-        print("ERROR: --auto-login requires DTV_EMAIL (or DTV_USERNAME) and DTV_PASSWORD environment variables", file=sys.stderr)
-        return 2
+    storage_state_path = out_dir / "storage_state.json"
+    tokens_path = out_dir / "tokens.json"
 
-    # Lazy import so normal runs don't require playwright until needed.
-    from playwright.sync_api import sync_playwright  # type: ignore
+    # Get credentials from environment (support both DTV_EMAIL and DTV_USERNAME)
+    username = os.getenv("DTV_EMAIL", "") or os.getenv("DTV_USERNAME", "")
+    password = os.getenv("DTV_PASSWORD", "")
 
-    headless = bool(args.headless) and not bool(args.no_headless)
+    if not username or not password:
+        print("ERROR: Set DTV_USERNAME and DTV_PASSWORD environment variables")
+        return 1
 
-    print(f"[INFO] Browser: {args.browser}")
-    print(f"[INFO] Headless: {headless}")
-    print(f"[INFO] Auto-login: {args.auto_login}")
-    if storage_state_path.exists():
-        print(f"[INFO] Found saved session: {storage_state_path}")
+    print(f"[INFO] Using browser: {args.browser}")
+    print(f"[INFO] Headless: {args.headless}")
+    print(f"[INFO] Output: {out_dir}")
 
-    captured: dict[str, object] = {}
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("ERROR: playwright not installed. Run: pip install playwright")
+        print("Then: python -m playwright install firefox")
+        return 1
+
+    # Captured data
+    captured_auth = None
+    captured_tokens = None
+
+    def on_request(request):
+        nonlocal captured_auth
+        try:
+            url = request.url
+            # Capture either playback auth or allchannels request
+            if (TARGET_SUBSTRING in url or ALLCHANNELS_MARKER in url) and not captured_auth:
+                headers = request.headers
+                captured_auth = {
+                    "url": url,
+                    "authorization": headers.get("authorization", ""),
+                    "headers": {k: v for k, v in headers.items() if k.lower() not in ["cookie", "host"]},
+                }
+                marker = "playback" if TARGET_SUBSTRING in url else "allchannels"
+                print(f"[CAPTURED] Auth request ({marker}): {url[:80]}...")
+        except:
+            pass
+
+    def on_response(response):
+        nonlocal captured_tokens
+        try:
+            url = response.url
+            if TOKENGO_SUBSTRING in url and not captured_tokens:
+                try:
+                    body = response.json()
+                    captured_tokens = {
+                        "access_token": body.get("access_token"),
+                        "refresh_token": body.get("refresh_token"),
+                        "token_type": body.get("token_type"),
+                        "expires_in": body.get("expires_in"),
+                    }
+                    print(f"[CAPTURED] OAuth tokens")
+                except:
+                    pass
+        except:
+            pass
 
     with sync_playwright() as p:
-        browser_type = getattr(p, args.browser)
-        browser = browser_type.launch(headless=headless)
-        
-        # CRITICAL: DirecTV blocks Firefox, always spoof Chrome
-        context_opts = {"user_agent": CHROME_UA}
-        
-        # Try to reuse saved session
-        if storage_state_path.exists():
-            context_opts["storage_state"] = str(storage_state_path)
-        
-        ctx = browser.new_context(**context_opts)
-        page = ctx.new_page()
-
-        def on_request(req):
-            try:
-                url = req.url
-                if ALLCHANNELS_MARKER not in url:
-                    return
-                headers = {k.lower(): v for k, v in req.headers.items()}
-                auth = headers.get("authorization", "")
-                ua = headers.get("user-agent", "") or headers.get("user_agent", "")
-                parsed = urlparse(url)
-                params = _normalize_params(parse_qs(parsed.query))
-                base_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", ""))
-
-                captured.update({
-                    "authorization": auth.replace("Bearer ", "").strip(),
-                    "user_agent": ua,
-                    "request_template": {
-                        "url": base_url,
-                        "params": params,
-                    },
-                })
-            except Exception:
-                # Don't crash the hook; just ignore
-                return
-
-        page.on("request", on_request)
-
-        print("[INFO] Navigating to https://stream.directv.com/guide")
-        page.goto("https://stream.directv.com/guide", wait_until="domcontentloaded", timeout=30000)
-        time.sleep(2)
-        
-        current_url = page.url
-        
-        # Check if on login page
-        is_login_page = "identity.directv.com" in current_url and "weblogin" in current_url
-        
-        if is_login_page:
-            if args.auto_login:
-                print("[INFO] On login page, attempting auto-login...")
-                try:
-                    # Wait for email field (React app takes time to render)
-                    email_field = page.locator('input[type="email"]').first
-                    email_field.wait_for(state="visible", timeout=10000)
-                    
-                    # Fill and submit email
-                    email_field.fill(email)
-                    print("[INFO] Filled email")
-                    email_field.press("Enter")
-                    print("[INFO] Submitted email, waiting for password page...")
-                    time.sleep(2)
-                    
-                    # Wait for password field
-                    password_field = page.locator('input[type="password"]').first
-                    password_field.wait_for(state="visible", timeout=10000)
-                    
-                    # Fill and submit password
-                    password_field.fill(password)
-                    print("[INFO] Filled password")
-                    password_field.press("Enter")
-                    print("[INFO] Submitted password, waiting for redirect...")
-                    
-                    # Wait for successful login (redirect to stream.directv.com)
-                    page.wait_for_url("**/stream.directv.com/**", timeout=20000)
-                    print("[INFO] ✓ Login successful!")
-                    
-                    # Save session for future use
-                    ctx.storage_state(path=str(storage_state_path))
-                    print(f"[INFO] Saved session: {storage_state_path}")
-                    
-                except Exception as e:
-                    print(f"[ERROR] Auto-login failed: {e}", file=sys.stderr)
-                    browser.close()
-                    return 2
-            else:
-                print("[INFO] On login page. Please log in manually in the browser window.")
-                print("[INFO] (Or use --auto-login with DTV_EMAIL and DTV_PASSWORD env vars)")
+        # Launch browser
+        if args.browser == "firefox":
+            browser = p.firefox.launch(headless=args.headless)
+        elif args.browser == "webkit":
+            browser = p.webkit.launch(headless=args.headless)
         else:
-            print("[INFO] Already logged in (or not on login page)")
+            browser = p.chromium.launch(
+                headless=args.headless,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
 
-        # Wait for allchannels request capture
-        print("[INFO] Waiting for allchannels request...")
-        deadline = time.time() + args.timeout
-        while time.time() < deadline:
-            if captured.get("authorization") and captured.get("request_template"):
-                print("[INFO] ✓ Captured allchannels request!")
-                break
-            page.wait_for_timeout(500)
+        # Chrome user agent (DirecTV only supports Chrome/Edge/Safari)
+        ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36"
+        )
 
-        # Always collect cookies
+        # Use existing session if available
+        context_opts = {"user_agent": ua}
+        if storage_state_path.exists():
+            print(f"[INFO] Using saved session: {storage_state_path}")
+            context_opts["storage_state"] = str(storage_state_path)
+        else:
+            print(f"[INFO] No saved session, will log in")
+
+        context = browser.new_context(**context_opts)
+        page = context.new_page()
+
+        # Attach listeners
+        page.on("request", on_request)
+        page.on("response", on_response)
+
+        print(f"[INFO] Navigating to DirecTV...")
         try:
-            cookies = ctx.cookies()
-        except Exception:
-            cookies = []
-        captured["cookies"] = cookies
+            page.goto("https://stream.directv.com/guide", timeout=args.timeout * 1000)
+        except Exception as e:
+            print(f"[ERROR] Navigation failed: {e}")
+            browser.close()
+            return 1
+
+        time.sleep(3)
+        current_url = page.url
+
+        # Check if on login page
+        if "identity.directv.com" in current_url and "weblogin" in current_url:
+            print(f"[INFO] On login page, attempting auto-login...")
+
+            try:
+                # Fill email
+                email_input = page.locator('input[type="email"]').first
+                email_input.wait_for(state="visible", timeout=10000)
+                email_input.fill(username)
+                print(f"[INFO] Filled email")
+
+                # Press Enter to go to password page
+                from playwright.sync_api import Keyboard
+                email_input.press("Enter")
+                time.sleep(2)
+
+                # Fill password
+                pass_input = page.locator('input[type="password"]').first
+                pass_input.wait_for(state="visible", timeout=10000)
+                pass_input.fill(password)
+                print(f"[INFO] Filled password")
+
+                # Submit
+                pass_input.press("Enter")
+                print(f"[INFO] Submitted login")
+
+                # Wait for redirect
+                page.wait_for_url("**/stream.directv.com/**", timeout=20000)
+                print(f"[INFO] Login successful!")
+
+                # Save session
+                context.storage_state(path=str(storage_state_path))
+                print(f"[INFO] Saved session: {storage_state_path}")
+
+            except Exception as e:
+                print(f"[ERROR] Auto-login failed: {e}")
+                browser.close()
+                return 1
+
+        elif "stream.directv.com" in current_url:
+            print(f"[INFO] Already logged in")
+
+        # Wait for auth requests
+        print(f"[INFO] Waiting for auth requests...")
+        timeout_at = time.time() + 30
+        while time.time() < timeout_at:
+            if captured_auth:  # Don't require tokens
+                break
+            time.sleep(0.5)
+
+        # Save results
+        if captured_auth:
+            # Parse URL to extract template format
+            from urllib.parse import urlparse, parse_qs
+            
+            parsed = urlparse(captured_auth["url"])
+            params = parse_qs(parsed.query)
+            
+            # Convert multi-value params to single values
+            params_single = {k: v[0] if isinstance(v, list) and v else v for k, v in params.items()}
+            
+            auth_output = {
+                "captured_utc": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "authorization": captured_auth["authorization"],
+                "headers": captured_auth["headers"],
+                "cookies": context.cookies(),  # Add cookies for fetch_allchannels_map
+                "request_template": {
+                    "scheme": parsed.scheme,
+                    "netloc": parsed.netloc,
+                    "path": parsed.path,
+                    "params": params_single,
+                    "ccid_param": "ccid"  # Standard param name
+                }
+            }
+            
+            if captured_tokens:
+                auth_output["tokens"] = captured_tokens
+
+            auth_context_path.write_text(json.dumps(auth_output, indent=2))
+            print(f"[SUCCESS] Wrote: {auth_context_path}")
+
+        if captured_tokens:
+            tokens_path.write_text(json.dumps(captured_tokens, indent=2))
+            print(f"[SUCCESS] Wrote: {tokens_path}")
+
+        if not captured_auth and not captured_tokens:
+            print(f"[WARNING] No auth data captured - may need to refresh page")
 
         browser.close()
 
-    if not captured.get("authorization"):
-        print("ERROR: Did not capture Authorization header.", file=sys.stderr)
-        print("Try: --no-headless to log in manually, or --auto-login with credentials", file=sys.stderr)
-        return 2
-    if not captured.get("request_template"):
-        print("ERROR: Did not capture allchannels request template.", file=sys.stderr)
-        return 2
-
-    out_path.write_text(json.dumps(captured, indent=2), encoding="utf-8")
-    print(f"[SUCCESS] Wrote: {out_path}")
     return 0
 
 
