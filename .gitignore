@@ -1,0 +1,31 @@
+﻿# Credentials & Sensitive Data (NEVER COMMIT)
+.env
+*.har
+auth_context.json
+storage_state.json
+tokens.json
+
+# Runtime Data Directories (keep folders, ignore contents)
+data/*
+!data/.gitkeep
+
+out/*
+!out/.gitkeep
+
+logs/*
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
