@@ -1,386 +1,264 @@
 #!/usr/bin/env python3
 """
-capture_auth_context.py
+capture_auth_context_selenium.py
 
-100% headless DirecTV Stream auth capture with auto-login.
-Captures OAuth tokens and authorization headers for API access.
-
-Usage:
-    set DTV_USERNAME=your-email@example.com
-    set DTV_PASSWORD=your-password
-    python capture_auth_context.py --headless
+Selenium-based auth capture for DirecTV Stream.
+Fallback for when Playwright doesn't work in container environments.
 """
-
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from urllib.parse import urlparse, parse_qs, urlunparse
 
 # Network request markers
-TARGET_SUBSTRING = "/right/authorization/channel/v1"
 ALLCHANNELS_MARKER = "/discovery/metadata/channel/v5/service/allchannels"
-TOKENGO_SUBSTRING = "/authn-tokengo/v3/tokens"
+CHROME_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 def main() -> int:
-    # Load .env file if it exists
-    env_file = Path(".env")
-    if env_file.exists():
-        print(f"[INFO] Loading .env file")
-        with open(env_file) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key.strip()] = value.strip()
+    import argparse
     
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out-path", help="Output path for auth_context.json (if not set, uses --out-dir)")
-    ap.add_argument("--out-dir", default="out", help="Output directory (default: out)")
-    ap.add_argument("--headless", action="store_true", default=True, help="Run headless (default: True)")
-    ap.add_argument("--browser", default="firefox", choices=["chromium", "firefox", "webkit"])
-    ap.add_argument("--timeout", type=int, default=60, help="Timeout in seconds")
-    ap.add_argument("--auto-login", action="store_true", default=True, help="Auto-login (default: True)")
+    ap.add_argument("--out-path", required=True)
+    ap.add_argument("--headless", action="store_true", default=True)
+    ap.add_argument("--auto-login", action="store_true", default=True)
+    ap.add_argument("--browser", default="firefox")
     args = ap.parse_args()
 
-    # Support both --out-path and --out-dir for backward compatibility
-    if args.out_path:
-        auth_context_path = Path(args.out_path)
-        out_dir = auth_context_path.parent
-    else:
-        out_dir = Path(args.out_dir)
-        auth_context_path = out_dir / "auth_context.json"
-    
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = Path(args.out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    storage_state_path = out_dir / "storage_state.json"
-    tokens_path = out_dir / "tokens.json"
-
-    # Get credentials from environment (support both DTV_EMAIL and DTV_USERNAME)
+    # Get credentials
     username = os.getenv("DTV_EMAIL", "") or os.getenv("DTV_USERNAME", "")
     password = os.getenv("DTV_PASSWORD", "")
 
     if not username or not password:
-        print("ERROR: Set DTV_USERNAME and DTV_PASSWORD environment variables")
+        print("ERROR: Set DTV_EMAIL/DTV_USERNAME and DTV_PASSWORD")
         return 1
 
-    print(f"[INFO] Using browser: {args.browser}")
+    print(f"[INFO] Using Selenium with {args.browser}")
     print(f"[INFO] Headless: {args.headless}")
-    print(f"[INFO] Output: {out_dir}")
 
     try:
-        from playwright.sync_api import sync_playwright
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.common.keys import Keys
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.common.exceptions import TimeoutException
     except ImportError:
-        print("ERROR: playwright not installed. Run: pip install playwright")
-        print("Then: python -m playwright install firefox")
+        print("ERROR: selenium not installed. Run: pip install selenium")
         return 1
 
-    # Captured data
-    captured_auth = None
-    captured_tokens = None
-    request_count = 0  # Debug counter
-
-    def on_request(request):
-        nonlocal captured_auth, request_count
-        try:
-            url = request.url
-            request_count += 1
-            
-            # Debug: Log every 10th request
-            if request_count % 10 == 0:
-                print(f"[DEBUG] Seen {request_count} requests so far...")
-            
-            # Capture either playback auth or allchannels request
-            if (TARGET_SUBSTRING in url or ALLCHANNELS_MARKER in url) and not captured_auth:
-                headers = request.headers
-                captured_auth = {
-                    "url": url,
-                    "authorization": headers.get("authorization", ""),
-                    "headers": {k: v for k, v in headers.items() if k.lower() not in ["cookie", "host"]},
-                }
-                marker = "playback" if TARGET_SUBSTRING in url else "allchannels"
-                print(f"[CAPTURED] Auth request ({marker}): {url[:80]}...")
-        except:
-            pass
-
-    def on_response(response):
-        nonlocal captured_tokens
-        try:
-            url = response.url
-            if TOKENGO_SUBSTRING in url and not captured_tokens:
-                try:
-                    body = response.json()
-                    captured_tokens = {
-                        "access_token": body.get("access_token"),
-                        "refresh_token": body.get("refresh_token"),
-                        "token_type": body.get("token_type"),
-                        "expires_in": body.get("expires_in"),
-                    }
-                    print(f"[CAPTURED] OAuth tokens")
-                except:
-                    pass
-        except:
-            pass
-
-    with sync_playwright() as p:
-        # Launch browser
-        if args.browser == "firefox":
-            browser = p.firefox.launch(headless=args.headless)
-        elif args.browser == "webkit":
-            browser = p.webkit.launch(headless=args.headless)
-        else:
-            browser = p.chromium.launch(
-                headless=args.headless,
-                args=["--disable-blink-features=AutomationControlled"]
-            )
-
-        # Chrome user agent (DirecTV only supports Chrome/Edge/Safari)
-        ua = (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        )
-
-        # Use existing session if available
-        context_opts = {"user_agent": ua}
-        if storage_state_path.exists():
-            print(f"[INFO] Using saved session: {storage_state_path}")
-            context_opts["storage_state"] = str(storage_state_path)
-        else:
-            print(f"[INFO] No saved session, will log in")
-
-        context = browser.new_context(**context_opts)
-        page = context.new_page()
-
-        # Attach listeners
-        page.on("request", on_request)
-        page.on("response", on_response)
-
-        print(f"[INFO] Navigating to DirecTV...")
-        try:
-            page.goto("https://stream.directv.com/guide", timeout=args.timeout * 1000)
-        except Exception as e:
-            print(f"[ERROR] Navigation failed: {e}")
-            browser.close()
-            return 1
-
-        time.sleep(3)
-        current_url = page.url
-
-        # Check if on login page
-        if "identity.directv.com" in current_url and "weblogin" in current_url:
-            print(f"[INFO] On login page, attempting auto-login...")
-            print(f"[DEBUG] Login page URL: {current_url}")
-
-            try:
-                # Verify credentials are actually set
-                if not username or not password:
-                    print(f"[ERROR] Credentials not set! username={bool(username)} password={bool(password)}")
-                    browser.close()
-                    return 1
-                
-                print(f"[DEBUG] Credentials check: username length={len(username)}, password length={len(password)}")
-                
-                # Fill email
-                print(f"[DEBUG] Looking for email field...")
-                email_input = page.locator('input[type="email"]').first
-                email_input.wait_for(state="visible", timeout=10000)
-                print(f"[DEBUG] Email field found and visible")
-                
-                email_input.fill(username)
-                print(f"[INFO] Filled email: {username[:3]}***")
-                
-                # Verify email was filled
-                filled_email = email_input.input_value()
-                print(f"[DEBUG] Email field value after fill: {filled_email[:3]}***")
-
-                # Press Enter to go to password page
-                from playwright.sync_api import Keyboard
-                print(f"[DEBUG] Pressing Enter on email field...")
-                page.keyboard.press("Enter")
-                print(f"[DEBUG] Waiting for password page to load...")
-                time.sleep(3)  # Wait longer for password page
-                
-                # Check what page we're on
-                after_email_url = page.url
-                print(f"[DEBUG] URL after email submit: {after_email_url[:80]}...")
-
-                # Fill password
-                print(f"[DEBUG] Looking for password field...")
-                pass_input = page.locator('input[type="password"]').first
-                pass_input.wait_for(state="visible", timeout=10000)
-                print(f"[DEBUG] Password field found and visible")
-                
-                pass_input.fill(password)
-                print(f"[INFO] Filled password: ***")
-                
-                # Verify password was filled
-                filled_pass = pass_input.input_value()
-                print(f"[DEBUG] Password field has value: {bool(filled_pass)} (length: {len(filled_pass)})")
-
-                # Wait for Sign In button to become visible
-                print(f"[DEBUG] Looking for Sign In button...")
-                try:
-                    sign_in_button = page.locator('button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]').first
-                    
-                    # Wait for button to be visible (it might be loading)
-                    print(f"[DEBUG] Waiting for button to be visible...")
-                    sign_in_button.wait_for(state="visible", timeout=5000)
-                    print(f"[DEBUG] Sign In button is now visible")
-                    
-                    sign_in_button.click()
-                    print(f"[INFO] Clicked Sign In button")
-                except Exception as btn_error:
-                    # Fallback to pressing Enter
-                    print(f"[WARNING] Button issue: {btn_error}")
-                    print(f"[DEBUG] Trying Enter key as fallback...")
-                    page.keyboard.press("Enter")
-                    print(f"[INFO] Pressed Enter on password (fallback)")
-                
-                print(f"[INFO] Submitted login")
-
-                # Check if still on login page after a moment
-                time.sleep(3)
-                check_url = page.url
-                print(f"[DEBUG] URL after login attempt: {check_url[:80]}...")
-                
-                if "identity.directv.com" in check_url and "weblogin" in check_url:
-                    print(f"[WARNING] Still on login page after submission - login may have failed")
-                    # Try to see if there's an error message
-                    try:
-                        error_elem = page.locator('[role="alert"], .error, .error-message').first
-                        if error_elem.is_visible():
-                            error_text = error_elem.inner_text()
-                            print(f"[ERROR] Login error message: {error_text}")
-                    except:
-                        pass
-
-                # Wait a bit more for login to process
-                time.sleep(2)
-                
-                # Explicitly navigate to guide page (the redirect might not complete properly)
-                print(f"[INFO] Navigating to guide page...")
-                print(f"[DEBUG] Current URL before guide nav: {page.url[:80]}...")
-                try:
-                    page.goto("https://stream.directv.com/guide", timeout=30000)
-                    print(f"[DEBUG] Guide navigation completed")
-                    time.sleep(5)  # Give the guide page time to load and make API calls
-                    print(f"[DEBUG] URL after guide nav: {page.url[:80]}...")
-                    
-                    # Check if we're actually on the guide page
-                    if "stream.directv.com/guide" in page.url:
-                        print(f"[DEBUG] Successfully on guide page")
-                    else:
-                        print(f"[WARNING] Not on guide page, on: {page.url}")
-                        
-                except Exception as nav_error:
-                    print(f"[WARNING] Guide navigation issue: {nav_error}")
-                    print(f"[DEBUG] URL after failed nav: {page.url[:80]}...")
-                
-                # Now wait for auth capture
-                print(f"[INFO] Waiting for auth capture...")
-                print(f"[DEBUG] Request count before wait: {request_count}")
-                wait_start = time.time()
-                while time.time() - wait_start < 30:
-                    if captured_auth:
-                        print(f"[INFO] Auth captured!")
-                        break
-                    time.sleep(0.5)
-                
-                print(f"[DEBUG] Request count after wait: {request_count}")
-                
-                if not captured_auth:
-                    print(f"[ERROR] No auth captured after navigating to guide")
-                    print(f"[DEBUG] Current URL: {page.url}")
-                    print(f"[DEBUG] Total requests seen: {request_count}")
-                    
-                    # Try to see page title
-                    try:
-                        page_title = page.title()
-                        print(f"[DEBUG] Page title: {page_title}")
-                    except:
-                        pass
-                    
-                    browser.close()
-                    return 1
-
-                # Save session
-                try:
-                    context.storage_state(path=str(storage_state_path))
-                    print(f"[INFO] Saved session: {storage_state_path}")
-                except Exception:
-                    pass
-
-            except Exception as e:
-                if captured_auth:
-                    print(f"[WARNING] Errors during login but auth was captured: {e}")
-                else:
-                    print(f"[ERROR] Auto-login failed: {e}")
-                    browser.close()
-                    return 1
-
-        elif "stream.directv.com" in current_url:
-            print(f"[INFO] Already logged in")
-
-        # Wait for auth requests
-        print(f"[INFO] Waiting for auth requests...")
-        print(f"[DEBUG] Total requests seen so far: {request_count}")
-        timeout_at = time.time() + 30
-        while time.time() < timeout_at:
-            if captured_auth:  # Don't require tokens
-                break
-            time.sleep(0.5)
+    # Setup driver
+    if args.browser == "firefox":
+        from selenium.webdriver.firefox.options import Options
+        from selenium.webdriver.firefox.service import Service
         
-        print(f"[DEBUG] Final request count: {request_count}")
-        if not captured_auth:
-            print(f"[WARNING] No auth captured after seeing {request_count} requests total")
+        options = Options()
+        if args.headless:
+            options.add_argument("--headless")
+        options.set_preference("general.useragent.override", CHROME_UA)
+        
+        driver = webdriver.Firefox(options=options)
+    else:
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        
+        options = Options()
+        if args.headless:
+            options.add_argument("--headless=new")
+        options.add_argument(f"--user-agent={CHROME_UA}")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        
+        # Enable performance logging to capture network requests
+        options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
+        
+        driver = webdriver.Chrome(options=options)
 
-        # Save results
-        if captured_auth:
-            # Parse URL to extract template format
-            from urllib.parse import urlparse, parse_qs
+    captured_auth = None
+    use_cdp = args.browser != "firefox"  # CDP only works with Chrome
+    
+    # Enable network capture for Chrome
+    if use_cdp:
+        try:
+            driver.execute_cdp_cmd("Network.enable", {})
+            print("[DEBUG] Network capture enabled via CDP")
+        except Exception as e:
+            print(f"[WARNING] CDP not available: {e}")
+            use_cdp = False
+    
+    def check_requests():
+        nonlocal captured_auth
+        if not use_cdp:
+            return False
+        try:
+            logs = driver.get_log("performance")
+            print(f"[DEBUG] Checking {len(logs)} performance log entries...")
             
-            parsed = urlparse(captured_auth["url"])
-            params = parse_qs(parsed.query)
+            for entry in logs:
+                log = json.loads(entry["message"])["message"]
+                if log["method"] == "Network.requestWillBeSent":
+                    url = log["params"]["request"]["url"]
+                    
+                    # Debug: show some requests
+                    if "api.cld.dtvce.com" in url or "directv" in url:
+                        print(f"[DEBUG] Saw request: {url[:80]}...")
+                    
+                    if ALLCHANNELS_MARKER in url and not captured_auth:
+                        headers = log["params"]["request"]["headers"]
+                        auth = headers.get("Authorization", headers.get("authorization", ""))
+                        
+                        if not auth:
+                            print(f"[WARNING] Found allchannels request but no Authorization header")
+                            continue
+                        
+                        parsed = urlparse(url)
+                        params = {k: v[0] if isinstance(v, list) else v 
+                                 for k, v in parse_qs(parsed.query).items()}
+                        
+                        captured_auth = {
+                            "authorization": auth.replace("Bearer ", "").strip(),
+                            "headers": headers,
+                            "cookies": [{"name": c["name"], "value": c["value"], 
+                                       "domain": c.get("domain", ""), "path": c.get("path", "/")}
+                                      for c in driver.get_cookies()],
+                            "request_template": {
+                                "url": urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", "", "")),
+                                "params": params,
+                            }
+                        }
+                        print(f"[CAPTURED] Auth request!")
+                        return True
+        except Exception as e:
+            print(f"[DEBUG] Check requests error: {e}")
+        return False
+
+    try:
+        print("[INFO] Navigating to DirecTV...")
+        driver.get("https://stream.directv.com/guide")
+        time.sleep(3)
+
+        current_url = driver.current_url
+        
+        if "identity.directv.com" in current_url:
+            print("[INFO] On login page, attempting auto-login...")
             
-            # Convert multi-value params to single values
-            params_single = {k: v[0] if isinstance(v, list) and v else v for k, v in params.items()}
+            # Fill email
+            print("[DEBUG] Waiting for email field...")
+            email_field = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="email"]'))
+            )
+            email_field.send_keys(username)
+            print(f"[INFO] Filled email")
             
-            auth_output = {
-                "captured_utc": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "authorization": captured_auth["authorization"],
-                "headers": captured_auth["headers"],
-                "cookies": context.cookies(),  # Add cookies for fetch_allchannels_map
-                "request_template": {
-                    "scheme": parsed.scheme,
-                    "netloc": parsed.netloc,
-                    "path": parsed.path,
-                    "params": params_single,
-                    "ccid_param": "ccid"  # Standard param name
+            # Submit email by pressing Enter
+            print("[DEBUG] Submitting email...")
+            email_field.send_keys(Keys.RETURN)
+            time.sleep(3)
+            
+            # Fill password
+            print("[DEBUG] Waiting for password field...")
+            pass_field = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]'))
+            )
+            pass_field.send_keys(password)
+            print(f"[INFO] Filled password")
+            
+            # Submit password by pressing Enter
+            print("[DEBUG] Submitting password...")
+            pass_field.send_keys(Keys.RETURN)
+            print("[INFO] Login submitted")
+            
+            # Wait for redirect/login
+            time.sleep(5)
+            
+            # Check for auth capture
+            check_requests()
+            
+            # Navigate to guide if needed
+            if not captured_auth:
+                print("[INFO] Navigating to guide...")
+                driver.get("https://stream.directv.com/guide")
+                time.sleep(5)
+            
+        else:
+            print("[INFO] Already logged in")
+            time.sleep(3)
+        
+        # Wait for auth capture
+        print("[INFO] Waiting for auth capture...")
+        
+        if use_cdp:
+            # Use CDP to capture requests (Chrome only)
+            for _ in range(60):
+                if check_requests():
+                    break
+                time.sleep(0.5)
+        else:
+            # Firefox fallback: extract from cookies/localStorage after successful login
+            print("[INFO] Firefox mode - extracting auth from page...")
+            time.sleep(5)  # Give page time to load
+            
+            try:
+                # Try to extract bearer token from localStorage
+                local_storage = driver.execute_script("return window.localStorage;")
+                session_storage = driver.execute_script("return window.sessionStorage;")
+                
+                # Look for auth tokens in storage
+                auth_token = None
+                for storage in [local_storage, session_storage]:
+                    if storage:
+                        for key, value in storage.items():
+                            if "token" in key.lower() or "auth" in key.lower():
+                                print(f"[DEBUG] Found {key} in storage")
+                                if "bearer" in str(value).lower() or len(str(value)) > 50:
+                                    auth_token = str(value)
+                                    break
+                
+                if not auth_token:
+                    print("[ERROR] Could not extract auth token from storage")
+                    print("[INFO] Try using Chrome instead: --browser chromium")
+                    return 1
+                
+                # Build auth context manually
+                parsed = urlparse("https://api.cld.dtvce.com/discovery/metadata/channel/v5/service/allchannels")
+                captured_auth = {
+                    "authorization": auth_token.replace("Bearer ", "").strip(),
+                    "headers": {
+                        "Authorization": f"Bearer {auth_token}",
+                        "User-Agent": CHROME_UA,
+                    },
+                    "cookies": [{"name": c["name"], "value": c["value"], 
+                               "domain": c.get("domain", ""), "path": c.get("path", "/")}
+                              for c in driver.get_cookies()],
+                    "request_template": {
+                        "url": str(parsed.scheme) + "://" + str(parsed.netloc) + str(parsed.path),
+                        "params": {"sort": "OrdCh%3DASC"},  # Default params
+                    }
                 }
-            }
-            
-            if captured_tokens:
-                auth_output["tokens"] = captured_tokens
-
-            auth_context_path.write_text(json.dumps(auth_output, indent=2))
-            print(f"[SUCCESS] Wrote: {auth_context_path}")
-
-        if captured_tokens:
-            tokens_path.write_text(json.dumps(captured_tokens, indent=2))
-            print(f"[SUCCESS] Wrote: {tokens_path}")
-
-        if not captured_auth and not captured_tokens:
-            print(f"[WARNING] No auth data captured - may need to refresh page")
-
-        browser.close()
-
-    return 0
+                print(f"[CAPTURED] Extracted auth from storage")
+                
+            except Exception as e:
+                print(f"[ERROR] Storage extraction failed: {e}")
+                return 1
+        
+        if not captured_auth:
+            print("[ERROR] No auth captured")
+            print(f"[DEBUG] Current URL: {driver.current_url}")
+            return 1
+        
+        # Write output
+        out_path.write_text(json.dumps(captured_auth, indent=2))
+        print(f"[SUCCESS] Wrote: {out_path}")
+        return 0
+        
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
