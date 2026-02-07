@@ -60,11 +60,12 @@ def main() -> int:
     storage_state_path = out_path.parent / "storage_state.json"
 
     # Check for credentials if auto-login requested
-    email = os.environ.get("DTV_EMAIL", "").strip()
+    # Accept both DTV_EMAIL and DTV_USERNAME for backward compatibility
+    email = os.environ.get("DTV_EMAIL", "").strip() or os.environ.get("DTV_USERNAME", "").strip()
     password = os.environ.get("DTV_PASSWORD", "").strip()
     
     if args.auto_login and (not email or not password):
-        print("ERROR: --auto-login requires DTV_EMAIL and DTV_PASSWORD environment variables", file=sys.stderr)
+        print("ERROR: --auto-login requires DTV_EMAIL (or DTV_USERNAME) and DTV_PASSWORD environment variables", file=sys.stderr)
         return 2
 
     # Lazy import so normal runs don't require playwright until needed.
