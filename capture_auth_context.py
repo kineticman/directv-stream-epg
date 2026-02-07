@@ -191,18 +191,34 @@ def main() -> int:
                 pass_input.press("Enter")
                 print(f"[INFO] Submitted login")
 
-                # Wait for redirect
-                page.wait_for_url("**/stream.directv.com/**", timeout=20000)
-                print(f"[INFO] Login successful!")
+                # Wait for redirect (longer timeout for slower containers)
+                try:
+                    page.wait_for_url("**/stream.directv.com/**", timeout=45000)
+                    print(f"[INFO] Login successful!")
+                except Exception as redirect_error:
+                    # Check if we already captured auth before the redirect completed
+                    if captured_auth:
+                        print(f"[INFO] Login likely successful (auth captured despite redirect timeout)")
+                    else:
+                        print(f"[ERROR] Login redirect timeout and no auth captured: {redirect_error}")
+                        browser.close()
+                        return 1
 
                 # Save session
-                context.storage_state(path=str(storage_state_path))
-                print(f"[INFO] Saved session: {storage_state_path}")
+                try:
+                    context.storage_state(path=str(storage_state_path))
+                    print(f"[INFO] Saved session: {storage_state_path}")
+                except Exception:
+                    pass  # Don't fail if we can't save session
 
             except Exception as e:
-                print(f"[ERROR] Auto-login failed: {e}")
-                browser.close()
-                return 1
+                # Check if we got auth anyway before failing
+                if captured_auth:
+                    print(f"[WARNING] Login had errors but auth was captured: {e}")
+                else:
+                    print(f"[ERROR] Auto-login failed: {e}")
+                    browser.close()
+                    return 1
 
         elif "stream.directv.com" in current_url:
             print(f"[INFO] Already logged in")
