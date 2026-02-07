@@ -1,6 +1,7 @@
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from xml.dom import minidom
@@ -87,13 +88,14 @@ def _pick_m3u_url(ch: dict, mode: str) -> str:
 
 def _parse_args(argv):
     """
-    Backward compatible forms:
+    Supports two calling conventions:
 
-      Old:
-        build_channels_exports.py <playback_map.csv> <allchannels_map.csv> <out.json> <out.xml> <out.m3u>
+      Positional (legacy):
+        build_channels_exports.py <playback.csv> <allchannels.csv> <out.json> <out.xml> <out.m3u>
 
-      New:
-        build_channels_exports.py <playback_map.csv> <allchannels_map.csv> <out.json> <out.xml> <out.m3u> [--m3u-url-mode ...] [--include-all]
+      Named (from daily_refresh.py):
+        build_channels_exports.py --allchannels <csv> --out-m3u <m3u> [--playback <csv>]
+                                  [--out-json <json>] [--out-xml <xml>] [--only-m3u]
     """
     p = argparse.ArgumentParser(
         prog="build_channels_exports.py",
@@ -101,11 +103,22 @@ def _parse_args(argv):
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
-    p.add_argument("playback_csv", help="playback_map.csv")
-    p.add_argument("allchannels_csv", help="allchannels_map.csv")
-    p.add_argument("out_json", help="output JSON file")
-    p.add_argument("out_xml", help="output XMLTV channels file")
-    p.add_argument("out_m3u", help="output M3U file")
+    # Positional args (optional now — use nargs='?' so named form works)
+    p.add_argument("playback_csv", nargs="?", default="", help="playback_map.csv (positional)")
+    p.add_argument("allchannels_csv_pos", nargs="?", default="", help="allchannels_map.csv (positional)")
+    p.add_argument("out_json_pos", nargs="?", default="", help="output JSON file (positional)")
+    p.add_argument("out_xml_pos", nargs="?", default="", help="output XMLTV channels file (positional)")
+    p.add_argument("out_m3u_pos", nargs="?", default="", help="output M3U file (positional)")
+
+    # Named args (preferred from daily_refresh)
+    p.add_argument("--allchannels", default="", help="allchannels_map.csv")
+    p.add_argument("--playback", default="", help="playback_map.csv (optional)")
+    p.add_argument("--out-json", default="", dest="out_json_flag", help="output JSON file")
+    p.add_argument("--out-xml", default="", dest="out_xml_flag", help="output XMLTV channels file")
+    p.add_argument("--out-m3u", default="", dest="out_m3u_flag", help="output M3U file")
+    p.add_argument("--only-m3u", action="store_true", help="Only produce the M3U (skip JSON + XML)")
+    p.add_argument("--url-mode", choices=["deeplink", "manifest", "fallback", "best"], default=None,
+                   help="Alias for --m3u-url-mode")
 
     p.add_argument(
         "--m3u-url-mode",
@@ -130,14 +143,37 @@ def _parse_args(argv):
         help="M3U group-title value",
     )
 
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+
+    # Resolve: named flags override positional
+    args.allchannels_csv = args.allchannels or args.allchannels_csv_pos or ""
+    args.playback_csv = args.playback or args.playback_csv or ""
+    args.out_json = args.out_json_flag or args.out_json_pos or ""
+    args.out_xml = args.out_xml_flag or args.out_xml_pos or ""
+    args.out_m3u = args.out_m3u_flag or args.out_m3u_pos or ""
+
+    # --url-mode is an alias for --m3u-url-mode
+    if args.url_mode:
+        args.m3u_url_mode = args.url_mode
+
+    if not args.allchannels_csv:
+        p.error("allchannels CSV is required (positional or --allchannels)")
+    if not args.out_m3u:
+        p.error("output M3U is required (positional or --out-m3u)")
+
+    return args
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     args = _parse_args(argv)
 
-    playback = _read_csv(args.playback_csv)
+    # Playback CSV is optional (may not exist yet in fresh installs)
+    if args.playback_csv and os.path.exists(args.playback_csv):
+        playback = _read_csv(args.playback_csv)
+    else:
+        playback = []
+
     allch = _read_csv(args.allchannels_csv)
 
     # Index AllChannels by ccid (for legacy joins) AND by resourceId (for canonical ids)
@@ -231,7 +267,7 @@ def main(argv=None):
 
         playable_val = pb.get("playable")
         if playable_val is None:
-            # best-effort heuristic if older playback_map.csv doesn’t have 'playable'
+            # best-effort heuristic if older playback_map.csv doesnâ€™t have 'playable'
             playable_val = bool(deeplink or manifest_url or fallback_url)
         else:
             playable_val = bool(playable_val)
@@ -259,31 +295,33 @@ def main(argv=None):
 
     merged.sort(key=sk)
 
-    # JSON
-    with open(args.out_json, "w", encoding="utf-8") as f:
-        json.dump({"channels": merged}, f, indent=2)
+    # JSON (skip if --only-m3u or no output path)
+    if args.out_json and not args.only_m3u:
+        with open(args.out_json, "w", encoding="utf-8") as f:
+            json.dump({"channels": merged}, f, indent=2)
 
-    # XMLTV channels (channels-only)
-    tv = Element("tv")
-    tv.set("source-info-name", "DirecTV Stream HAR-free")
-    tv.set("generator-info-name", "build_channels_exports.py")
+    # XMLTV channels (channels-only) - skip if --only-m3u or no output path
+    if args.out_xml and not args.only_m3u:
+        tv = Element("tv")
+        tv.set("source-info-name", "DirecTV Stream HAR-free")
+        tv.set("generator-info-name", "build_channels_exports.py")
 
-    for ch in merged:
-        c = SubElement(tv, "channel")
-        c.set("id", ch["xmltv_id"])
+        for ch in merged:
+            c = SubElement(tv, "channel")
+            c.set("id", ch["xmltv_id"])
 
-        dn = SubElement(c, "display-name")
-        dn.text = f'{ch.get("number") or ""} {ch.get("name") or ""}'.strip()
+            dn = SubElement(c, "display-name")
+            dn.text = f'{ch.get("number") or ""} {ch.get("name") or ""}'.strip()
 
-        dn2 = SubElement(c, "display-name")
-        dn2.text = ch.get("name") or ""
+            dn2 = SubElement(c, "display-name")
+            dn2.text = ch.get("name") or ""
 
-        if ch.get("logo"):
-            icon = SubElement(c, "icon")
-            icon.set("src", ch["logo"])
+            if ch.get("logo"):
+                icon = SubElement(c, "icon")
+                icon.set("src", ch["logo"])
 
-    with open(args.out_xml, "wb") as f:
-        f.write(_pretty_xml_bytes(tv))
+        with open(args.out_xml, "wb") as f:
+            f.write(_pretty_xml_bytes(tv))
 
     # M3U
     include_all = bool(args.include_all)
@@ -331,8 +369,10 @@ def main(argv=None):
 
     with_stream = sum(1 for ch in merged if (_pick_m3u_url(ch, mode) or "").strip())
     playable_cnt = sum(1 for ch in merged if ch.get("playable"))
-    print(f"Wrote: {args.out_json}")
-    print(f"Wrote: {args.out_xml}")
+    if args.out_json and not args.only_m3u:
+        print(f"Wrote: {args.out_json}")
+    if args.out_xml and not args.only_m3u:
+        print(f"Wrote: {args.out_xml}")
     print(f"Wrote: {args.out_m3u}")
     print(f"Playback rows: {len(playback)} | AllChannels rows: {len(allch)}")
     print(f"Channels total: {len(merged)} | playable: {playable_cnt} | with selected-url({mode}): {with_stream}")

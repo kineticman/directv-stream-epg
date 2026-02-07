@@ -57,7 +57,7 @@ RUN playwright install firefox || true
 # Copy application code
 COPY . .
 
-# Create data, output, and log directories
+# Create data, output, log, and template directories
 RUN mkdir -p /app/data /app/out /var/log/directv /app/templates
 
 # Copy entrypoint script

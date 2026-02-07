@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-daily_refresh.py â€” DirecTV Stream guide refresher + exporters
+daily_refresh.py Ã¢â‚¬â€ DirecTV Stream guide refresher + exporters
 
 Goal (beta UX):
 - Keep /out minimal: only the deliverables (XMLTV + M3U by default)
@@ -197,7 +197,9 @@ def main(argv: List[str]) -> int:
     t1 = time.time()
     log("=== fetch_dtv_schedule ===")
     cmd = [py, str(repo / "fetch_dtv_schedule.py"),
-           "--out-json", str(schedule_json),
+           "--auth-context", str(auth_context),
+           "--allchannels", str(allchannels_csv),
+           "--out-dir", str(data_dir),
            "--days", str(args.schedule_days),
            "--window-hours", str(args.schedule_window_hours),
            "--max-channels", str(args.schedule_max_channels),
@@ -206,12 +208,6 @@ def main(argv: List[str]) -> int:
            "--retry-backoff", str(args.schedule_retry_backoff)]
     if args.schedule_include_all:
         cmd.append("--include-all")
-    if args.auto_login:
-        cmd.append("--auto-login")
-    if args.headless:
-        cmd.append("--headless")
-    if args.browser:
-        cmd += ["--browser", args.browser]
 
     _run(cmd)
     log(f"OK: fetch_dtv_schedule ({time.time() - t1:.1f}s)")

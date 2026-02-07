@@ -75,6 +75,12 @@ def main() -> int:
         options.add_argument(f"--user-agent={CHROME_UA}")
         options.add_argument("--disable-blink-features=AutomationControlled")
         
+        # Required for running Chrome in Docker containers
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=1920,1080")
+        
         # Enable performance logging to capture network requests
         options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         

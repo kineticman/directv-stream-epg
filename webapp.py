@@ -90,7 +90,8 @@ if not LOG_FILE.exists():
     LOG_FILE.touch()
 
 # Flask app
-app = Flask(__name__, template_folder='/app/templates')
+APP_DIR_RESOLVED = Path(__file__).resolve().parent
+app = Flask(__name__, template_folder=str(APP_DIR_RESOLVED / 'templates'))
 app.config['SECRET_KEY'] = os.urandom(24)
 
 # Global state
