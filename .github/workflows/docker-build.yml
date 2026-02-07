@@ -10,21 +10,21 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write  # Add this
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Log in to GHCR (using PAT)
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}  # Changed this
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: kineticman
+          password: ${{ secrets.GHCR_PAT }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: ghcr.io/${{ github.repository }}:latest  # Changed this
+          tags: ghcr.io/${{ github.repository }}:latest
