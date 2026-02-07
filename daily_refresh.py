@@ -123,20 +123,66 @@ def main(argv: List[str]) -> int:
 
     t0 = time.time()
 
-    # Step 0: Capture auth context if it doesn't exist or if --auto-login is specified
-    if not auth_context.exists() or args.auto_login:
-        log("=== capture_auth_context ===")
-        cmd = [py, str(repo / "capture_auth_context.py"),
-               "--out-path", str(auth_context)]
+    # Step 0: Check for auth context
+    if not auth_context.exists():
+        log("=" * 80)
+        log("AUTH CONTEXT NOT FOUND")
+        log("")
+        
         if args.auto_login:
-            cmd.append("--auto-login")
-        if args.headless:
-            cmd.append("--headless")
-        if args.browser:
-            cmd += ["--browser", args.browser]
-        _run(cmd)
-        log(f"OK: capture_auth_context ({time.time() - t0:.1f}s)")
-        t0 = time.time()
+            # Check if credentials are available
+            username = os.getenv("DTV_EMAIL", "") or os.getenv("DTV_USERNAME", "")
+            password = os.getenv("DTV_PASSWORD", "")
+            
+            if not username or not password:
+                log("ERROR: --auto-login requires credentials via environment variables:")
+                log("  DTV_EMAIL (or DTV_USERNAME)")
+                log("  DTV_PASSWORD")
+                log("")
+                log("Docker: Add to docker-compose.yml or docker run:")
+                log("  environment:")
+                log("    - DTV_EMAIL=your.email@example.com")
+                log("    - DTV_PASSWORD=yourpassword")
+                log("")
+                log("OR: Create auth_context.json manually:")
+                log("  1. Run locally: python capture_auth_context.py --out-path ./data/auth_context.json")
+                log("  2. Copy data/auth_context.json to container's /app/data/ volume")
+                log("=" * 80)
+                return 1
+            
+            log("Credentials found in environment, attempting auto-login...")
+            log("=== capture_auth_context (auto-login) ===")
+            cmd = [py, str(repo / "capture_auth_context.py"),
+                   "--out-path", str(auth_context),
+                   "--auto-login"]
+            if args.headless:
+                cmd.append("--headless")
+            if args.browser:
+                cmd += ["--browser", args.browser]
+            try:
+                _run(cmd)
+                log(f"OK: capture_auth_context ({time.time() - t0:.1f}s)")
+            except SystemExit as e:
+                log(f"FAILED: capture_auth_context (exit code {e.code})")
+                log("Check container logs for browser/login errors")
+                return 1
+            t0 = time.time()
+        else:
+            log("SETUP REQUIRED:")
+            log("")
+            log("Option 1: Create auth_context.json manually (Recommended)")
+            log("  1. Run locally: python capture_auth_context.py --out-path ./data/auth_context.json")
+            log("  2. Copy data/auth_context.json to container's /app/data/ volume")
+            log("")
+            log("Option 2: Use --auto-login with credentials")
+            log("  Add to docker-compose.yml:")
+            log("    environment:")
+            log("      - DTV_EMAIL=your.email@example.com")
+            log("      - DTV_PASSWORD=yourpassword")
+            log("  Then: docker-compose up (will auto-capture on first run)")
+            log("")
+            log("=" * 80)
+            return 1
     else:
         log(f"Using existing auth_context: {auth_context}")
 

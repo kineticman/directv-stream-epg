@@ -6,55 +6,25 @@ services:
     container_name: directv-epg
     restart: unless-stopped
     
+    # Load environment variables from .env file
+    env_file:
+      - .env
+    
     ports:
-      - "${WEB_PORT:-8675}:${WEB_PORT:-8675}"  # Web server port (configurable)
+      - "8675:8675"
     
     volumes:
-      # Mount .env file (REQUIRED - contains credentials)
-      - ./.env:/app/.env:ro
-      
-      # Persist data between container restarts
+      # Persistent data (auth, channel lists, schedule cache)
       - ./data:/app/data
+      # Output files (XMLTV + M3U)
       - ./out:/app/out
-      
-      # Optional: Mount logs
-      - ./logs:/var/log/directv
     
-    environment:
-      # Credentials (can be set here or in .env file)
-      - DTV_USERNAME=${DTV_USERNAME}
-      - DTV_PASSWORD=${DTV_PASSWORD}
-      
-      # Host IP (REQUIRED for correct URLs in admin - set to your server's LAN IP)
-      - HOST_IP=${HOST_IP:-192.168.1.100}
-      
-      # Web server port
-      - WEB_PORT=${WEB_PORT:-8675}
-      
-      # Refresh schedule (24-hour format)
-      - REFRESH_HOUR=${REFRESH_HOUR:-3}      # Hour: 0-23
-      - REFRESH_MINUTE=${REFRESH_MINUTE:-0}  # Minute: 0-59
-      
-      # Timezone for scheduler
-      - TZ=${TZ:-America/New_York}
+    # Default command with auto-login enabled
+    command: python daily_refresh.py --auto-login --headless --browser chromium
     
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${WEB_PORT:-8675}/health"]
+      test: ["CMD", "test", "-f", "/app/out/dtv_epg.xml"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
-    
-    # Resource limits (adjust as needed)
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G
-        reservations:
-          cpus: '1'
-          memory: 512M
-
-networks:
-  default:
-    name: directv-epg-network
+      start_period: 2m
