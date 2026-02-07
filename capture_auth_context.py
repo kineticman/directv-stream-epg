@@ -198,17 +198,29 @@ def main() -> int:
                 pass_input.press("Enter")
                 print(f"[INFO] Submitted login")
 
-                # Wait for the auth request to be captured (not the redirect)
-                print(f"[INFO] Waiting for auth capture after login...")
+                # Wait a bit for login to process
+                time.sleep(5)
+                
+                # Explicitly navigate to guide page (the redirect might not complete properly)
+                print(f"[INFO] Navigating to guide page...")
+                try:
+                    page.goto("https://stream.directv.com/guide", timeout=30000)
+                    time.sleep(5)  # Give the guide page time to load and make API calls
+                except Exception as nav_error:
+                    print(f"[WARNING] Guide navigation issue: {nav_error}")
+                
+                # Now wait for auth capture
+                print(f"[INFO] Waiting for auth capture...")
                 wait_start = time.time()
-                while time.time() - wait_start < 60:
+                while time.time() - wait_start < 30:
                     if captured_auth:
-                        print(f"[INFO] Auth captured! Login successful.")
+                        print(f"[INFO] Auth captured!")
                         break
                     time.sleep(0.5)
                 
                 if not captured_auth:
-                    print(f"[ERROR] Login submitted but no auth captured after 60s")
+                    print(f"[ERROR] No auth captured after navigating to guide")
+                    print(f"[DEBUG] Current URL: {page.url}")
                     browser.close()
                     return 1
 
@@ -217,12 +229,11 @@ def main() -> int:
                     context.storage_state(path=str(storage_state_path))
                     print(f"[INFO] Saved session: {storage_state_path}")
                 except Exception:
-                    pass  # Don't fail if we can't save session
+                    pass
 
             except Exception as e:
-                # Check if we got auth anyway before failing
                 if captured_auth:
-                    print(f"[WARNING] Login had errors but auth was captured: {e}")
+                    print(f"[WARNING] Errors during login but auth was captured: {e}")
                 else:
                     print(f"[ERROR] Auto-login failed: {e}")
                     browser.close()
