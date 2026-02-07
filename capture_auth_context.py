@@ -198,18 +198,19 @@ def main() -> int:
                 pass_input.press("Enter")
                 print(f"[INFO] Submitted login")
 
-                # Wait for redirect (longer timeout for slower containers)
-                try:
-                    page.wait_for_url("**/stream.directv.com/**", timeout=45000)
-                    print(f"[INFO] Login successful!")
-                except Exception as redirect_error:
-                    # Check if we already captured auth before the redirect completed
+                # Wait for the auth request to be captured (not the redirect)
+                print(f"[INFO] Waiting for auth capture after login...")
+                wait_start = time.time()
+                while time.time() - wait_start < 60:
                     if captured_auth:
-                        print(f"[INFO] Login likely successful (auth captured despite redirect timeout)")
-                    else:
-                        print(f"[ERROR] Login redirect timeout and no auth captured: {redirect_error}")
-                        browser.close()
-                        return 1
+                        print(f"[INFO] Auth captured! Login successful.")
+                        break
+                    time.sleep(0.5)
+                
+                if not captured_auth:
+                    print(f"[ERROR] Login submitted but no auth captured after 60s")
+                    browser.close()
+                    return 1
 
                 # Save session
                 try:
