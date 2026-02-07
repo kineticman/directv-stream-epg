@@ -175,42 +175,109 @@ def main() -> int:
         # Check if on login page
         if "identity.directv.com" in current_url and "weblogin" in current_url:
             print(f"[INFO] On login page, attempting auto-login...")
+            print(f"[DEBUG] Login page URL: {current_url}")
 
             try:
                 # Fill email
+                print(f"[DEBUG] Looking for email field...")
                 email_input = page.locator('input[type="email"]').first
                 email_input.wait_for(state="visible", timeout=10000)
+                print(f"[DEBUG] Email field found and visible")
+                
                 email_input.fill(username)
-                print(f"[INFO] Filled email")
+                print(f"[INFO] Filled email: {username[:3]}***")
+                
+                # Verify email was filled
+                filled_email = email_input.input_value()
+                print(f"[DEBUG] Email field value after fill: {filled_email[:3]}***")
 
                 # Press Enter to go to password page
                 from playwright.sync_api import Keyboard
+                print(f"[DEBUG] Pressing Enter on email field...")
                 email_input.press("Enter")
+                print(f"[DEBUG] Waiting for password page to load...")
                 time.sleep(2)
+                
+                # Check what page we're on
+                after_email_url = page.url
+                print(f"[DEBUG] URL after email submit: {after_email_url[:80]}...")
 
                 # Fill password
+                print(f"[DEBUG] Looking for password field...")
                 pass_input = page.locator('input[type="password"]').first
                 pass_input.wait_for(state="visible", timeout=10000)
+                print(f"[DEBUG] Password field found and visible")
+                
                 pass_input.fill(password)
-                print(f"[INFO] Filled password")
+                print(f"[INFO] Filled password: ***")
+                
+                # Verify password was filled
+                filled_pass = pass_input.input_value()
+                print(f"[DEBUG] Password field has value: {bool(filled_pass)} (length: {len(filled_pass)})")
 
-                # Submit
-                pass_input.press("Enter")
+                # Try clicking the Sign In button instead of pressing Enter
+                print(f"[DEBUG] Looking for Sign In button...")
+                try:
+                    sign_in_button = page.locator('button:has-text("Sign In"), button:has-text("Sign in"), button[type="submit"]').first
+                    button_visible = sign_in_button.is_visible()
+                    print(f"[DEBUG] Sign In button visible: {button_visible}")
+                    
+                    if button_visible:
+                        sign_in_button.click()
+                        print(f"[INFO] Clicked Sign In button")
+                    else:
+                        print(f"[WARNING] Button exists but not visible, pressing Enter instead")
+                        pass_input.press("Enter")
+                        print(f"[INFO] Pressed Enter on password")
+                except Exception as btn_error:
+                    # Fallback to pressing Enter
+                    print(f"[WARNING] Could not find/click button: {btn_error}")
+                    pass_input.press("Enter")
+                    print(f"[INFO] Pressed Enter on password (fallback)")
+                
                 print(f"[INFO] Submitted login")
 
-                # Wait a bit for login to process
-                time.sleep(5)
+                # Check if still on login page after a moment
+                time.sleep(3)
+                check_url = page.url
+                print(f"[DEBUG] URL after login attempt: {check_url[:80]}...")
+                
+                if "identity.directv.com" in check_url and "weblogin" in check_url:
+                    print(f"[WARNING] Still on login page after submission - login may have failed")
+                    # Try to see if there's an error message
+                    try:
+                        error_elem = page.locator('[role="alert"], .error, .error-message').first
+                        if error_elem.is_visible():
+                            error_text = error_elem.inner_text()
+                            print(f"[ERROR] Login error message: {error_text}")
+                    except:
+                        pass
+
+                # Wait a bit more for login to process
+                time.sleep(2)
                 
                 # Explicitly navigate to guide page (the redirect might not complete properly)
                 print(f"[INFO] Navigating to guide page...")
+                print(f"[DEBUG] Current URL before guide nav: {page.url[:80]}...")
                 try:
                     page.goto("https://stream.directv.com/guide", timeout=30000)
+                    print(f"[DEBUG] Guide navigation completed")
                     time.sleep(5)  # Give the guide page time to load and make API calls
+                    print(f"[DEBUG] URL after guide nav: {page.url[:80]}...")
+                    
+                    # Check if we're actually on the guide page
+                    if "stream.directv.com/guide" in page.url:
+                        print(f"[DEBUG] Successfully on guide page")
+                    else:
+                        print(f"[WARNING] Not on guide page, on: {page.url}")
+                        
                 except Exception as nav_error:
                     print(f"[WARNING] Guide navigation issue: {nav_error}")
+                    print(f"[DEBUG] URL after failed nav: {page.url[:80]}...")
                 
                 # Now wait for auth capture
                 print(f"[INFO] Waiting for auth capture...")
+                print(f"[DEBUG] Request count before wait: {request_count}")
                 wait_start = time.time()
                 while time.time() - wait_start < 30:
                     if captured_auth:
@@ -218,9 +285,20 @@ def main() -> int:
                         break
                     time.sleep(0.5)
                 
+                print(f"[DEBUG] Request count after wait: {request_count}")
+                
                 if not captured_auth:
                     print(f"[ERROR] No auth captured after navigating to guide")
                     print(f"[DEBUG] Current URL: {page.url}")
+                    print(f"[DEBUG] Total requests seen: {request_count}")
+                    
+                    # Try to see page title
+                    try:
+                        page_title = page.title()
+                        print(f"[DEBUG] Page title: {page_title}")
+                    except:
+                        pass
+                    
                     browser.close()
                     return 1
 
