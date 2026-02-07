@@ -42,6 +42,8 @@ def main() -> int:
     ap.add_argument("--browser", default="chromium")
     ap.add_argument("--screenshot-dir", default="",
                     help="Dir to save debug screenshots (default: same dir as --out-path)")
+    ap.add_argument("--no-screenshots", action="store_true",
+                    help="Disable debug screenshots")
     args = ap.parse_args()
 
     out_path = Path(args.out_path)
@@ -114,6 +116,8 @@ def main() -> int:
             use_cdp = False
 
     def save_screenshot(name: str) -> None:
+        if args.no_screenshots:
+            return
         try:
             path = screenshot_dir / f"debug_{name}.png"
             driver.save_screenshot(str(path))
