@@ -27,7 +27,7 @@ version: '3.8'
 
 services:
   directv-epg:
-    image: ghcr.io/yourusername/directv-epg:latest  # Or build locally
+    image: ghcr.io/kineticman/directv-epg:latest  # Or build locally
     container_name: directv-epg
     restart: unless-stopped
     
