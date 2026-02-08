@@ -142,6 +142,12 @@ def _parse_args(argv):
         default="DirecTV Stream",
         help="M3U group-title value",
     )
+    p.add_argument(
+        "--chno-start",
+        type=int,
+        default=0,
+        help="Override channel numbers starting at this value (0 = use original numbers)",
+    )
 
     args = p.parse_args(argv)
 
@@ -328,6 +334,8 @@ def main(argv=None):
     mode = args.m3u_url_mode
     group_title = args.group_title
     include_alt = bool(args.m3u_include_alt_attrs)
+    chno_start = args.chno_start or 0
+    chno_counter = chno_start
 
     with open(args.out_m3u, "w", encoding="utf-8", newline="") as f:
         f.write("#EXTM3U\n")
@@ -342,7 +350,14 @@ def main(argv=None):
             tvg_id = ch["xmltv_id"]
             tvg_name = ch.get("name") or tvg_id
             tvg_logo = ch.get("logo") or ""
-            tvg_chno = ch.get("number") or ""
+
+            # Channel number: sequential from chno_start, or original
+            if chno_start > 0:
+                tvg_chno = str(chno_counter)
+                chno_counter += 1
+            else:
+                tvg_chno = ch.get("number") or ""
+
             display = (tvg_name or tvg_id).strip()
 
             attrs = [

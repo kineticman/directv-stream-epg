@@ -280,6 +280,9 @@ def main(argv: List[str]) -> int:
            "--allchannels", str(allchannels_csv),
            "--out-m3u", str(m3u_out),
            "--url-mode", args.m3u_url_mode]
+    chno_start = _as_int(os.getenv("CHNO_START"), 0) or 0
+    if chno_start > 0:
+        cmd += ["--chno-start", str(chno_start)]
     if not args.emit_channel_exports:
         cmd += ["--only-m3u"]
     # default now: do NOT emit json/xml unless asked

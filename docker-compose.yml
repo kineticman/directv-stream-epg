@@ -28,6 +28,8 @@ services:
       - REFRESH_HOUR=${REFRESH_HOUR:-3}
       - REFRESH_MINUTE=${REFRESH_MINUTE:-0}
       - TZ=${TZ:-America/New_York}
+      # Optional: Renumber channels starting at this number (0 = use original)
+      - CHNO_START=${CHNO_START:-0}
     
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${WEB_PORT:-8675}/health"]
