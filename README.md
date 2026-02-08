@@ -1,24 +1,24 @@
-# ðŸ“º DirecTV Stream EPG Server
+# DirecTV Stream EPG Server
 
 **Automatically generate XMLTV EPG and M3U playlists from your DirecTV Stream subscription.**
 
-Perfect for Plex, Jellyfin, Emby, Channels DVR, and other media servers!
+Perfect for Plex, Jellyfin, Emby, Channels DVR, and other media servers.
 
-## âœ¨ What This Does
+## What This Does
 
 This Docker container:
-- ðŸ”„ Logs into your DirecTV Stream account (once)
-- ðŸ“¡ Fetches your channel lineup and EPG data
-- ðŸ“… Updates automatically every day at 3 AM
-- ðŸŒ Serves files via web browser (no command line needed!)
-- ðŸ“‹ Provides easy copy-paste URLs for your media server
+- Logs into your DirecTV Stream account (once)
+- Fetches your channel lineup and EPG data
+- Updates automatically every day at 3 AM
+- Serves files via web browser (no command line needed)
+- Provides easy copy-paste URLs for your media server
 
-## ðŸŽ¯ Quick Start (Portainer)
+## Quick Start (Portainer)
 
 ### 1. Add Stack in Portainer
 
 1. Open Portainer
-2. Go to **Stacks** â†’ **Add Stack**
+2. Go to **Stacks** -> **Add Stack**
 3. Name it: `directv-epg`
 4. Paste this docker-compose:
 
@@ -30,21 +30,21 @@ services:
     image: ghcr.io/kineticman/directv-stream-epg:latest  # Or build locally
     container_name: directv-epg
     restart: unless-stopped
-    
+
     ports:
       - "${WEB_PORT:-8675}:${WEB_PORT:-8675}"
-    
+
     volumes:
       - ./data:/app/data
       - ./out:/app/out
       - ./logs:/var/log/directv
-    
+
     environment:
       # REQUIRED: Set in Portainer Environment Variables section below
       - DTV_USERNAME=${DTV_USERNAME}
       - DTV_PASSWORD=${DTV_PASSWORD}
       - HOST_IP=${HOST_IP}
-      
+
       # Optional: Customize these (defaults shown)
       - WEB_PORT=${WEB_PORT:-8675}
       - REFRESH_HOUR=${REFRESH_HOUR:-3}
@@ -75,30 +75,31 @@ In Portainer's **Environment variables** section (below the compose editor):
 Open in your browser: `http://your-server-ip:8675/`
 
 You'll see:
-- âœ… System status
-- ðŸ“‚ Output files with copy-paste URLs
-- ðŸ“Š Live refresh logs
-- ðŸ”„ Manual refresh button
+- System status
+- Output files with copy-paste URLs
+- Live refresh logs
+- Manual refresh button
+- Re-authenticate and clear buttons
 
-## ðŸ“‹ Using the Files
+## Using the Files
 
 ### For Plex / Jellyfin / Emby
 
 1. Go to your admin page: `http://your-server-ip:8675/`
-2. Click **ðŸ“‹ Copy URL** next to each file
+2. Click **Copy URL** next to each file
 3. Paste into your media server:
    - **EPG URL**: `http://192.168.1.100:8675/files/dtv_epg.xml`
    - **M3U URL**: `http://192.168.1.100:8675/files/dtv_channels.m3u`
 
 ### For Channels DVR
 
-1. Settings â†’ DVR â†’ Sources
+1. Settings -> DVR -> Sources
 2. Add Custom Channels
 3. Paste the M3U URL
-4. Settings â†’ Guide Data â†’ XMLTV
+4. Settings -> Guide Data -> XMLTV
 5. Paste the EPG URL
 
-## âš™ï¸ Configuration
+## Configuration
 
 All settings are configured via environment variables in Portainer:
 
@@ -119,15 +120,21 @@ All settings are configured via environment variables in Portainer:
 - `America/Denver` (Mountain)
 - `America/Los_Angeles` (Pacific)
 
-## ðŸ”§ Common Tasks
+## Common Tasks
 
 ### Manual Refresh
 1. Open admin: `http://your-server-ip:8675/`
-2. Click **ðŸ”„ Refresh Now**
+2. Click **Refresh Now**
 3. Watch live logs for progress
 
+### Re-Authenticate
+If your session expires or login fails:
+1. Open admin page
+2. Click **Re-Authenticate**
+3. This deletes saved tokens, re-logs in, and runs a full refresh
+
 ### View Logs
-Logs auto-refresh on the admin page. Click **ðŸ”„ Refresh Logs** for latest.
+Logs auto-refresh on the admin page. Click **Refresh Logs** for latest.
 
 ### Change Schedule
 Edit environment variable in Portainer:
@@ -137,18 +144,18 @@ Then restart the stack.
 
 ### Update Container
 ```bash
-docker-compose pull
-docker-compose up -d
+docker compose pull
+docker compose up -d --build
 ```
 
-Or in Portainer: Stack â†’ Editor â†’ Pull & Redeploy
+Or in Portainer: Stack -> Editor -> Pull & Redeploy
 
-## ðŸ› Troubleshooting
+## Troubleshooting
 
 ### Container won't start
 **Check credentials**: Make sure `DTV_USERNAME` and `DTV_PASSWORD` are correct.
 
-View logs in Portainer: Containers â†’ directv-epg â†’ Logs
+View logs in Portainer: Containers -> directv-epg -> Logs
 
 ### Files not accessible from other devices
 **Fix HOST_IP**: Set to your server's actual IP address (not `localhost` or `127.0.0.1`)
@@ -161,44 +168,48 @@ Example: `HOST_IP=192.168.1.100`
 **Manual refresh**: Use the web admin button to trigger immediately.
 
 ### Authentication failed
-Your session may have expired. The container will re-authenticate automatically on next refresh.
+The container will automatically detect stale auth tokens and re-authenticate
+on the next refresh. You can also force re-authentication from the admin page.
 
-## ðŸ“Š What Files Are Generated
+## What Files Are Generated
 
 | File | Size | Purpose |
 |------|------|---------|
-| `dtv_epg.xml` | ~8 MB | XMLTV EPG with 3 days of program data |
+| `dtv_epg.xml` | ~8 MB | XMLTV EPG with 2 days of program data |
 | `dtv_channels.m3u` | ~200 KB | Channel playlist with URLs |
-| `dtv_channels.json` | ~200 KB | Channel list in JSON format |
 
-## ðŸ”’ Security Notes
+## Security Notes
 
 - Your credentials are stored in environment variables
 - Never commit your `.env` file to git
 - The web admin has no authentication (LAN use only)
 - For internet access, use a reverse proxy with auth
 
-## â“ FAQ
+## FAQ
 
-**Q: Can I watch live TV through this?**  
+**Q: Can I watch live TV through this?**
 A: No. This only generates EPG data and channel lists for integration with other apps.
 
-**Q: Do I need a DirecTV Stream subscription?**  
+**Q: Do I need a DirecTV Stream subscription?**
 A: Yes. You must have an active DirecTV Stream account.
 
-**Q: Will this work with DirecTV Satellite?**  
+**Q: Will this work with DirecTV Satellite?**
 A: No. This is specifically for DirecTV Stream (formerly AT&T TV Now).
 
-**Q: How often does it refresh?**  
+**Q: How often does it refresh?**
 A: Daily at 3:00 AM by default (configurable).
 
-**Q: Can I run multiple instances?**  
+**Q: Can I run multiple instances?**
 A: Yes, but use different ports for each instance.
 
-**Q: Does it work with VPN?**  
+**Q: Does it work with VPN?**
 A: Yes, as long as the container can reach DirecTV's servers.
 
-## ðŸ†˜ Support
+**Q: Can I renumber channels to avoid conflicts?**
+A: Yes. Set `CHNO_START=2500` (or any number) and channels will be numbered
+sequentially starting from that value.
+
+## Support
 
 **Issues**: Check the live logs on the admin page first.
 
@@ -207,13 +218,13 @@ A: Yes, as long as the container can reach DirecTV's servers.
 - Your environment variables (redact password!)
 - What you tried
 
-## ðŸ“œ License
+## License
 
 Personal use only. Requires active DirecTV Stream subscription.
 
 ---
 
 **Quick Links:**
-- ðŸŒ Web Admin: `http://your-server:8675/`
-- ðŸ“º EPG: `http://your-server:8675/files/dtv_epg.xml`
-- ðŸ“‹ M3U: `http://your-server:8675/files/dtv_channels.m3u`
+- Web Admin: `http://your-server:8675/`
+- EPG: `http://your-server:8675/files/dtv_epg.xml`
+- M3U: `http://your-server:8675/files/dtv_channels.m3u`
