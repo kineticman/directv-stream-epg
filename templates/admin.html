@@ -35,6 +35,8 @@
         .btn-sm { padding: 4px 10px; font-size: 0.8em; }
         .actions { display: flex; gap: 10px; margin-top: 12px; }
         #log-box { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.8em; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5; color: #aaa; }
+        .card-desc { color: #888; font-size: 0.82em; margin-bottom: 14px; line-height: 1.5; }
+        .hl { color: #00d4ff; font-family: monospace; font-size: 0.92em; }
         .toast { position: fixed; bottom: 20px; right: 20px; background: #00d4ff; color: #1a1a2e; padding: 10px 20px; border-radius: 8px; font-weight: 600; display: none; z-index: 999; }
     </style>
 </head>
@@ -71,25 +73,49 @@
             </div>
         </div>
 
-        <!-- Files Card -->
+        <!-- EPG Files Card -->
         <div class="card">
-            <h2>📂 Output Files</h2>
-            {% if files %}
-                {% for f in files %}
+            <h2>📡 EPG Files</h2>
+            <p class="card-desc">Standard XMLTV + M3U — use with any IPTV client.</p>
+            {% if epg_files %}
+                {% for f in epg_files %}
                 <div class="file-row">
                     <div>
                         <div class="file-name">{{ f.name }}</div>
                         <div class="file-meta">{{ f.size_mb }} MB · {{ f.modified_ago }}</div>
                     </div>
                     <div class="url-box">
-                        <input type="text" readonly value="{{ server_url }}{{ f.url }}" id="url-{{ loop.index }}">
-                        <button class="btn btn-sm" onclick="copyUrl('url-{{ loop.index }}')">📋 Copy</button>
+                        <input type="text" readonly value="{{ server_url }}{{ f.url }}" id="url-epg-{{ loop.index }}">
+                        <button class="btn btn-sm" onclick="copyUrl('url-epg-{{ loop.index }}')">📋 Copy</button>
                         <a href="{{ f.url }}" class="btn btn-sm" target="_blank">⬇️</a>
                     </div>
                 </div>
                 {% endfor %}
             {% else %}
                 <p style="color: #888; padding: 12px 0;">No files yet. Run a refresh first.</p>
+            {% endif %}
+        </div>
+
+        <!-- PrismCast Files Card -->
+        <div class="card">
+            <h2>📺 PrismCast Files</h2>
+            <p class="card-desc">Point your media server at <span class="hl">prismcast_enriched.m3u</span> + <span class="hl">dtv_epg.xml</span> for live TV with full guide data. Import <span class="hl">prismcast_channels.json</span> into PrismCast once to register all channels.</p>
+            {% if prismcast_files %}
+                {% for f in prismcast_files %}
+                <div class="file-row">
+                    <div>
+                        <div class="file-name">{{ f.name }}</div>
+                        <div class="file-meta">{{ f.size_mb }} MB · {{ f.modified_ago }}</div>
+                    </div>
+                    <div class="url-box">
+                        <input type="text" readonly value="{{ server_url }}{{ f.url }}" id="url-pc-{{ loop.index }}">
+                        <button class="btn btn-sm" onclick="copyUrl('url-pc-{{ loop.index }}')">📋 Copy</button>
+                        <a href="{{ f.url }}" class="btn btn-sm" target="_blank">⬇️</a>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p style="color: #888; padding: 12px 0;">Not generated yet — run a refresh and ensure <code style="color:#00d4ff">PRISMCAST_HOST</code> is set.</p>
             {% endif %}
         </div>
 
