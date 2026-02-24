@@ -16,6 +16,12 @@ services:
       - ./out:/app/out
       # Logs
       - ./logs:/var/log/directv
+      # Mount Python files for live updates (no rebuild needed!)
+      - ./webapp.py:/app/webapp.py
+      - ./build_prismcast_m3u.py:/app/build_prismcast_m3u.py
+      - ./enrich_prismcast_m3u.py:/app/enrich_prismcast_m3u.py
+      - ./build_channels_exports.py:/app/build_channels_exports.py
+      - ./daily_refresh.py:/app/daily_refresh.py
     
     environment:
       # REQUIRED: Your DirecTV credentials

@@ -123,6 +123,8 @@ def main(argv: List[str]) -> int:
     # Deliverables
     epg_xml = out_dir / "dtv_epg.xml"
     m3u_out = out_dir / "dtv_channels.m3u"
+    prismcast_json = out_dir / "prismcast_channels.json"
+    prismcast_enriched_m3u = out_dir / "prismcast_enriched.m3u"
 
     # Optional extra exports
     channels_json = data_dir / "dtv_channels.json"
@@ -291,11 +293,31 @@ def main(argv: List[str]) -> int:
     _run(cmd)
     log(f"OK: build_channels_exports ({time.time() - t3:.1f}s)")
 
+    # Step: build_prismcast_m3u — generates PrismCast JSON import + enriched M3U with EPG tvg-ids
+    t4 = time.time()
+    log("=== build_prismcast_m3u ===")
+    prismcast_host = os.getenv("PRISMCAST_HOST", "localhost")
+    prismcast_port = os.getenv("PRISMCAST_PORT", "5589")
+    rc = _try_run([py, str(repo / "build_prismcast_m3u.py"),
+                   "--allchannels", str(allchannels_csv),
+                   "--out-json", str(prismcast_json),
+                   "--out-m3u", str(prismcast_enriched_m3u),
+                   "--prismcast-host", prismcast_host,
+                   "--prismcast-port", prismcast_port])
+    if rc == 0:
+        log(f"OK: build_prismcast_m3u ({time.time() - t4:.1f}s)")
+    else:
+        log(f"WARNING: build_prismcast_m3u failed (exit code {rc}) — PrismCast outputs not updated")
+
     log("DONE")
     log(f"  - {epg_xml}")
     log(f"  - {m3u_out}")
     log(f"  - {schedule_json}")
     log(f"  - {allchannels_csv}")
+    if prismcast_json.exists():
+        log(f"  - {prismcast_json}")
+    if prismcast_enriched_m3u.exists():
+        log(f"  - {prismcast_enriched_m3u}")
     if args.emit_channel_exports:
         log(f"  - {channels_json}")
         log(f"  - {channels_xml}")

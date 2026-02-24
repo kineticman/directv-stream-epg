@@ -90,8 +90,7 @@ if not LOG_FILE.exists():
     LOG_FILE.touch()
 
 # Flask app
-APP_DIR_RESOLVED = Path(__file__).resolve().parent
-app = Flask(__name__, template_folder=str(APP_DIR_RESOLVED / 'templates'))
+app = Flask(__name__, template_folder='/app/templates')
 app.config['SECRET_KEY'] = os.urandom(24)
 
 # Global state
@@ -306,85 +305,6 @@ def api_refresh():
     return jsonify({'message': 'Refresh started'})
 
 
-@app.route('/api/reauth', methods=['POST'])
-def api_reauth():
-    """Delete auth context and re-capture credentials"""
-    if refresh_running:
-        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
-
-    logger.info("Re-auth triggered via web interface")
-
-    # Delete auth files
-    deleted = []
-    for name in ['auth_context.json', 'storage_state.json', 'tokens.json']:
-        p = DATA_DIR / name
-        if p.exists():
-            p.unlink()
-            deleted.append(name)
-            logger.info(f"Deleted: {p}")
-
-    # Also clean debug screenshots
-    for p in DATA_DIR.glob('debug_*.png'):
-        p.unlink()
-
-    if not deleted:
-        msg = 'No auth files found — will capture fresh on next refresh'
-    else:
-        msg = f'Deleted: {", ".join(deleted)}'
-
-    # Log it
-    with open(LOG_FILE, 'a') as f:
-        f.write(f"\n{'='*80}\n")
-        f.write(f"Re-auth triggered: {datetime.now().isoformat()}\n")
-        f.write(f"{msg}\n")
-        f.write(f"{'='*80}\n\n")
-
-    # Kick off a full refresh (which will re-capture auth first)
-    import threading
-    thread = threading.Thread(target=run_refresh)
-    thread.daemon = True
-    thread.start()
-
-    return jsonify({'message': msg + ' — refresh started'})
-
-
-@app.route('/api/clear-outputs', methods=['POST'])
-def api_clear_outputs():
-    """Delete generated output files"""
-    if refresh_running:
-        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
-
-    logger.info("Clear outputs triggered via web interface")
-
-    deleted = []
-    for p in OUT_DIR.iterdir():
-        if p.is_file() and p.name != '.gitkeep':
-            p.unlink()
-            deleted.append(p.name)
-            logger.info(f"Deleted: {p}")
-
-    if not deleted:
-        msg = 'No output files to delete'
-    else:
-        msg = f'Deleted {len(deleted)} file(s): {", ".join(deleted)}'
-
-    with open(LOG_FILE, 'a') as f:
-        f.write(f"\n[{datetime.now().isoformat()}] Clear outputs: {msg}\n")
-
-    return jsonify({'message': msg})
-
-
-@app.route('/api/clear-logs', methods=['POST'])
-def api_clear_logs():
-    """Truncate the refresh log"""
-    if refresh_running:
-        return jsonify({'error': 'Refresh is running, wait for it to finish'}), 409
-
-    LOG_FILE.write_text('')
-    logger.info("Logs cleared via web interface")
-    return jsonify({'message': 'Logs cleared'})
-
-
 @app.route('/files/<path:filename>')
 def serve_file(filename):
     """Serve output files"""
@@ -395,6 +315,209 @@ def serve_file(filename):
 def health():
     """Health check endpoint"""
     return 'OK', 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PrismCast integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_channel_index() -> dict:
+    """Load ccid → channel metadata from prismcast_channels.json (or allchannels fallback)."""
+    # Prefer pre-built PrismCast channel file
+    pc_path = OUT_DIR / 'prismcast_channels.json'
+    if pc_path.exists():
+        try:
+            import json as _json
+            data = _json.loads(pc_path.read_text(encoding='utf-8'))
+            return {str(ch['ccid']): ch for ch in data.get('channels', [])}
+        except Exception as e:
+            logger.warning(f"Could not load prismcast_channels.json: {e}")
+
+    # Fallback: read allchannels_map.csv directly
+    csv_path = DATA_DIR / 'allchannels_map.csv'
+    if csv_path.exists():
+        import csv as _csv
+        index = {}
+        try:
+            with open(csv_path, 'r', encoding='utf-8-sig', newline='') as f:
+                for row in _csv.DictReader(f):
+                    ccid = (row.get('ccid') or '').strip()
+                    if ccid:
+                        index[ccid] = {
+                            'ccid': ccid,
+                            'resourceId': (row.get('resourceId') or '').strip(),
+                            'callSign':   (row.get('callSign') or '').strip(),
+                            'name':       (row.get('channelName') or row.get('callSign') or f'CH {ccid}').strip(),
+                            'number':     (row.get('channelNumber') or '').strip(),
+                            'logo':       (row.get('logoUrl') or '').strip(),
+                        }
+        except Exception as e:
+            logger.warning(f"Could not load allchannels_map.csv: {e}")
+        return index
+
+    return {}
+
+
+@app.route('/prismcast/<ccid>')
+def prismcast_resolver(ccid):
+    """
+    PrismCast channel resolver.
+
+    PrismCast opens this URL in Chrome. The page:
+      1. Looks up channel metadata (callSign, name) from local channel index
+      2. Stores the target in sessionStorage
+      3. Redirects Chrome to https://stream.directv.com/guide
+      4. The Tampermonkey userscript picks up sessionStorage and performs:
+         a. Click the channel tile  (aria-label="view {NAME}")
+         b. Click the play button   (bg-image: mt_play_stroke_sm_dark4x.webp)
+         c. DRM playback starts inside the authenticated browser
+
+    Requires the Tampermonkey userscript dtv_prismcast.user.js to be installed
+    in the Chrome instance PrismCast uses.
+    """
+    ccid = ccid.strip()
+    index = _load_channel_index()
+    ch = index.get(ccid)
+
+    if not ch:
+        # Unknown channel — still try; Tampermonkey will do its best
+        ch = {'ccid': ccid, 'callSign': '', 'name': f'Channel {ccid}', 'resourceId': '', 'number': '', 'logo': ''}
+        logger.warning(f"PrismCast resolver: unknown ccid={ccid}, channel index has {len(index)} entries")
+    else:
+        logger.info(f"PrismCast resolver: ccid={ccid} → {ch.get('callSign')} / {ch.get('name')}")
+
+    import json as _json
+
+    # Serialize target for sessionStorage injection
+    target_json = _json.dumps({
+        'ccid':     ch.get('ccid', ccid),
+        'callSign': ch.get('callSign', ''),
+        'name':     ch.get('name', ''),
+        'resourceId': ch.get('resourceId', ''),
+    })
+
+    channel_display = ch.get('callSign') or ch.get('name') or f'Channel {ccid}'
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tuning {channel_display}...</title>
+  <style>
+    * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+    body {{
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      flex-direction: column;
+      gap: 20px;
+    }}
+    .spinner {{
+      width: 48px; height: 48px;
+      border: 4px solid #333;
+      border-top-color: #0099d6;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    h2 {{ font-size: 1.4rem; font-weight: 500; color: #e0e0e0; }}
+    p  {{ font-size: 0.85rem; color: #666; }}
+  </style>
+</head>
+<body>
+  <div class="spinner"></div>
+  <h2>Tuning to {channel_display}</h2>
+  <p>Launching DirecTV Stream&hellip;</p>
+
+  <script>
+    // Store channel target for Tampermonkey to pick up on stream.directv.com
+    try {{
+      sessionStorage.setItem('prismcast_target', {target_json!r});
+    }} catch(e) {{
+      // sessionStorage may not persist across origin redirect; use URL hash as fallback
+      console.warn('[PrismCast resolver] sessionStorage write failed:', e);
+    }}
+
+    // Small delay so the page visually confirms, then redirect
+    setTimeout(function() {{
+      window.location.replace('https://stream.directv.com/guide');
+    }}, 400);
+  </script>
+</body>
+</html>"""
+
+    from flask import Response
+    return Response(html, mimetype='text/html')
+
+
+@app.route('/prismcast')
+def prismcast_index():
+    """List all channels available for PrismCast with their resolver URLs."""
+    server_ip  = get_server_ip()
+    base_url   = f"http://{server_ip}:{PORT}"
+    index      = _load_channel_index()
+    channels   = sorted(index.values(), key=lambda c: (
+        int(c.get('number') or 999999) if (c.get('number') or '').isdigit() else 999999,
+        c.get('name') or ''
+    ))
+
+    rows_html = ''.join(
+        f'<tr>'
+        f'<td>{c.get("number") or "—"}</td>'
+        f'<td>{c.get("callSign") or "—"}</td>'
+        f'<td>{c.get("name") or "—"}</td>'
+        f'<td><code>{base_url}/prismcast/{c["ccid"]}</code></td>'
+        f'</tr>'
+        for c in channels
+    )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PrismCast Channel Index</title>
+  <style>
+    body {{ font-family: monospace; background: #111; color: #ccc; padding: 20px; }}
+    h1   {{ color: #0099d6; margin-bottom: 10px; }}
+    p    {{ color: #888; margin-bottom: 20px; font-size: 0.9rem; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ padding: 6px 12px; text-align: left; border-bottom: 1px solid #333; }}
+    th {{ color: #0099d6; }}
+    code {{ color: #aef; font-size: 0.85rem; }}
+    tr:hover {{ background: #1a1a1a; }}
+  </style>
+</head>
+<body>
+  <h1>PrismCast Channel Resolver</h1>
+  <p>{len(channels)} channels &mdash; resolver base: <code>{base_url}/prismcast/&lt;ccid&gt;</code></p>
+  <p>Install <a href="/dtv-inject.js" style="color:#0099d6">dtv_prismcast.user.js</a> in Tampermonkey,
+     then use these URLs in PrismCast.</p>
+  <table>
+    <thead><tr><th>#</th><th>Call Sign</th><th>Name</th><th>Resolver URL</th></tr></thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+</body>
+</html>"""
+
+    from flask import Response
+    return Response(html, mimetype='text/html')
+
+
+@app.route('/dtv-inject.js')
+def serve_userscript():
+    """Serve the Tampermonkey userscript for easy installation."""
+    userscript_path = APP_DIR / 'dtv_prismcast.user.js'
+    if userscript_path.exists():
+        content = userscript_path.read_text(encoding='utf-8')
+        from flask import Response
+        return Response(content, mimetype='application/javascript')
+    from flask import abort
+    abort(404)
 
 
 def main():
