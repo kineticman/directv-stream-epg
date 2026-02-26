@@ -40,6 +40,7 @@ import re
 DTV_GUIDE_URL = "https://stream.directv.com/guide"
 PRISMCAST_PROFILE = "directvStream"
 GROUP_TITLE = "DirecTV Stream"
+NAME_SUFFIX = " (DirecTV)"
 
 
 def _read_csv(path):
@@ -88,10 +89,12 @@ def build_channels(rows):
         if not logo and resource_id:
             logo = f"https://dfwfis.prod.dtvcdn.com/catalog/image/imageserver/v1/service/channel/{resource_id}/chlogo-clb-guide/60/45"
 
-        key = _channel_key(name)
+        key = _channel_key(name + NAME_SUFFIX)
         if not key:
             skipped += 1
             continue
+
+        display_name = name + NAME_SUFFIX
 
         # Resolve duplicate keys by appending ccid
         if key in seen_keys:
@@ -100,7 +103,7 @@ def build_channels(rows):
 
         channels.append({
             "key":         key,
-            "name":        name,
+            "name":        display_name,
             "number":      number,
             "callsign":    callsign,
             "ccid":        ccid,

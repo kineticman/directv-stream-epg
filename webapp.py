@@ -11,6 +11,8 @@ import sys
 import subprocess
 import logging
 import socket
+import json
+import requests
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from flask import Flask, render_template, jsonify, send_from_directory, request
@@ -97,6 +99,10 @@ app.config['SECRET_KEY'] = os.urandom(24)
 refresh_running = False
 last_refresh_time = None
 last_refresh_status = None
+
+# PrismCast state
+last_merge_time = None
+last_merge_status = None  # 'success', 'error', or None
 
 
 def run_refresh():
@@ -250,6 +256,7 @@ def index():
     server_ip = get_server_ip()
     server_url = f"http://{server_ip}:{PORT}"
     
+    prismcast_host = os.getenv('PRISMCAST_HOST', '').strip()
     return render_template(
         'admin.html',
         epg_files=epg_files,
@@ -258,7 +265,10 @@ def index():
         last_refresh_time=last_refresh_time.isoformat() if last_refresh_time else None,
         last_refresh_status=last_refresh_status,
         scheduler_info=scheduler_info,
-        server_url=server_url
+        server_url=server_url,
+        prismcast_host=prismcast_host,
+        last_merge_time=last_merge_time.isoformat() if last_merge_time else None,
+        last_merge_status=last_merge_status,
     )
 
 
@@ -312,6 +322,126 @@ def api_refresh():
     thread.start()
     
     return jsonify({'message': 'Refresh started'})
+
+
+def get_prismcast_base():
+    """Get PrismCast base URL from environment."""
+    host = os.getenv('PRISMCAST_HOST', '').strip()
+    port = os.getenv('PRISMCAST_PORT', '5589').strip()
+    if not host:
+        return None
+    return f"http://{host}:{port}"
+
+
+@app.route('/api/prismcast/status')
+def api_prismcast_status():
+    """Check if PrismCast is reachable and return channel count."""
+    base = get_prismcast_base()
+    if not base:
+        return jsonify({'reachable': False, 'reason': 'PRISMCAST_HOST not set'})
+    try:
+        resp = requests.get(f"{base}/channels", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return jsonify({
+                'reachable': True,
+                'channel_count': data.get('count', 0),
+                'base_url': base,
+                'last_merge': last_merge_time.isoformat() if last_merge_time else None,
+                'last_merge_status': last_merge_status,
+            })
+        return jsonify({'reachable': False, 'reason': f"HTTP {resp.status_code}"})
+    except Exception as e:
+        return jsonify({'reachable': False, 'reason': str(e)})
+
+
+@app.route('/api/prismcast/merge', methods=['POST'])
+def api_prismcast_merge():
+    """Merge DirecTV channels into PrismCast (export → merge → import)."""
+    global last_merge_time, last_merge_status
+
+    base = get_prismcast_base()
+    if not base:
+        return jsonify({'error': 'PRISMCAST_HOST not set'}), 400
+
+    allchannels_csv = DATA_DIR / 'allchannels_map.csv'
+    if not allchannels_csv.exists():
+        return jsonify({'error': 'allchannels_map.csv not found — run a refresh first'}), 400
+
+    try:
+        # Step 1: fetch current PrismCast channels
+        export_resp = requests.get(f"{base}/config/channels/export", timeout=10)
+        if export_resp.status_code != 200:
+            raise RuntimeError(f"Export failed: HTTP {export_resp.status_code}")
+        existing = export_resp.json()
+        # export returns { channels: {...}, providerSelections: {...} } or just {...}
+        if 'channels' in existing and isinstance(existing['channels'], dict):
+            existing_channels = existing['channels']
+        else:
+            existing_channels = existing
+
+        # Step 2: build DirecTV channels via build_prismcast_m3u.py
+        sys.path.insert(0, str(APP_DIR))
+        from build_prismcast_m3u import build_channels, _read_csv, write_json
+        rows = _read_csv(str(allchannels_csv))
+        dtv_channels, skipped = build_channels(rows)
+        dtv_dict = {}
+        for ch in dtv_channels:
+            entry = {
+                'name': ch['name'],
+                'url': 'https://stream.directv.com/guide',
+                'profile': 'directvStream',
+                'channelSelector': ch['resource_id'],
+            }
+            if ch['number']:
+                try:
+                    entry['channelNumber'] = int(ch['number'])
+                except ValueError:
+                    entry['channelNumber'] = ch['number']
+            dtv_dict[ch['key']] = entry
+
+        # Step 3: merge — existing channels base, DirecTV keys overwrite
+        merged = {**existing_channels, **dtv_dict}
+
+        # Step 4: push merged channels back
+        import_resp = requests.post(
+            f"{base}/config/channels/import",
+            json=merged,
+            headers={'Content-Type': 'application/json'},
+            timeout=15
+        )
+        if import_resp.status_code not in (200, 201):
+            raise RuntimeError(f"Import failed: HTTP {import_resp.status_code} — {import_resp.text[:200]}")
+
+        # Also write the JSON file as a local backup
+        prismcast_json = OUT_DIR / 'prismcast_channels.json'
+        import json as _json
+        with open(prismcast_json, 'w') as f:
+            _json.dump(dtv_dict, f, indent=2)
+            f.write('\n')
+
+        last_merge_time = datetime.now()
+        last_merge_status = 'success'
+
+        existing_count = len(existing_channels)
+        dtv_count = len(dtv_dict)
+        merged_count = len(merged)
+        new_count = merged_count - existing_count
+
+        logger.info(f"PrismCast merge: {existing_count} existing + {dtv_count} DirecTV ({new_count} new) = {merged_count} total")
+        return jsonify({
+            'message': f"Merged {dtv_count} DirecTV channels into PrismCast ({new_count} new, {dtv_count - new_count} updated). Total: {merged_count} channels.",
+            'existing': existing_count,
+            'dtv': dtv_count,
+            'total': merged_count,
+            'last_merge': last_merge_time.isoformat(),
+        })
+
+    except Exception as e:
+        last_merge_time = datetime.now()
+        last_merge_status = 'error'
+        logger.error(f"PrismCast merge failed: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/files/<path:filename>')

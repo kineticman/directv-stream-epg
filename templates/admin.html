@@ -12,6 +12,8 @@
         .subtitle { color: #888; margin-bottom: 24px; font-size: 0.9em; }
         .card { background: #16213e; border-radius: 10px; padding: 20px; margin-bottom: 16px; border: 1px solid #0f3460; }
         .card h2 { color: #00d4ff; font-size: 1.1em; margin-bottom: 12px; }
+        .card-desc { color: #888; font-size: 0.82em; margin-bottom: 14px; line-height: 1.5; }
+        .hl { color: #00d4ff; font-family: monospace; font-size: 0.92em; }
         .status-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #0f3460; }
         .status-row:last-child { border-bottom: none; }
         .status-label { color: #888; }
@@ -33,11 +35,16 @@
         .btn-danger { border-color: #ff5252; color: #ff5252; }
         .btn-danger:hover { background: #ff5252; color: #fff; }
         .btn-sm { padding: 4px 10px; font-size: 0.8em; }
-        .actions { display: flex; gap: 10px; margin-top: 12px; }
+        .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; align-items: center; }
+        .merge-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 0 14px; border-bottom: 1px solid #0f3460; margin-bottom: 12px; }
+        .pc-status { display: flex; align-items: center; gap: 8px; font-size: 0.85em; }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #888; display: inline-block; flex-shrink: 0; }
+        .status-dot.ok { background: #00e676; }
+        .status-dot.err { background: #ff5252; }
+        .status-dot.checking { background: #ffab40; animation: pulse 1.5s infinite; }
         #log-box { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 0.8em; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.5; color: #aaa; }
-        .card-desc { color: #888; font-size: 0.82em; margin-bottom: 14px; line-height: 1.5; }
-        .hl { color: #00d4ff; font-family: monospace; font-size: 0.92em; }
         .toast { position: fixed; bottom: 20px; right: 20px; background: #00d4ff; color: #1a1a2e; padding: 10px 20px; border-radius: 8px; font-weight: 600; display: none; z-index: 999; }
+        .toast.err { background: #ff5252; color: #fff; }
     </style>
 </head>
 <body>
@@ -99,7 +106,32 @@
         <!-- PrismCast Files Card -->
         <div class="card">
             <h2>📺 PrismCast Files</h2>
-            <p class="card-desc">Point your media server at <span class="hl">prismcast_enriched.m3u</span> + <span class="hl">dtv_epg.xml</span> for live TV with full guide data. Import <span class="hl">prismcast_channels.json</span> into PrismCast once to register all channels.</p>
+            <p class="card-desc">Point your media server at <span class="hl">prismcast_enriched.m3u</span> + <span class="hl">dtv_epg.xml</span> for live TV with full guide data. Use <strong>Merge</strong> to push DirecTV channels into PrismCast without overwriting your other configured sources.</p>
+
+            {% if prismcast_host %}
+            <div class="merge-row">
+                <div class="pc-status">
+                    <span id="pc-status-dot" class="status-dot checking"></span>
+                    <span id="pc-status-text">Checking PrismCast...</span>
+                </div>
+                <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                    <span id="merge-stamp" class="file-meta">
+                        {% if last_merge_time %}
+                            Last merged: {{ last_merge_time }}
+                            <span class="{{ 'status-ok' if last_merge_status == 'success' else 'status-err' }}">({{ last_merge_status }})</span>
+                        {% else %}
+                            Never merged
+                        {% endif %}
+                    </span>
+                    <button class="btn" id="merge-btn" onclick="triggerMerge()">🔀 Merge into PrismCast</button>
+                </div>
+            </div>
+            {% else %}
+            <div style="padding: 8px 0 14px; border-bottom: 1px solid #0f3460; margin-bottom: 12px;">
+                <span class="status-warn">⚠️ Set <span class="hl">PRISMCAST_HOST</span> in your environment to enable PrismCast integration.</span>
+            </div>
+            {% endif %}
+
             {% if prismcast_files %}
                 {% for f in prismcast_files %}
                 <div class="file-row">
@@ -115,7 +147,7 @@
                 </div>
                 {% endfor %}
             {% else %}
-                <p style="color: #888; padding: 12px 0;">Not generated yet — run a refresh and ensure <code style="color:#00d4ff">PRISMCAST_HOST</code> is set.</p>
+                <p style="color: #888; padding: 12px 0;">Not generated yet — run a refresh first.</p>
             {% endif %}
         </div>
 
@@ -189,6 +221,68 @@
                 });
         }
 
+        function triggerMerge() {
+            const btn = document.getElementById('merge-btn');
+            fetch('/api/prismcast/status')
+                .then(r => r.json())
+                .then(s => {
+                    const count = s.channel_count ?? '?';
+                    if (!confirm(`This will merge your DirecTV channels into PrismCast.\n\nPrismCast currently has ${count} channels. DirecTV channels will be added or updated — other sources will not be touched.\n\nContinue?`)) return;
+                    doMerge(btn);
+                })
+                .catch(() => {
+                    if (!confirm('Could not reach PrismCast to get current channel count. Proceed anyway?')) return;
+                    doMerge(btn);
+                });
+        }
+
+        function doMerge(btn) {
+            btn.disabled = true;
+            btn.textContent = '⏳ Merging...';
+            fetch('/api/prismcast/merge', { method: 'POST' })
+                .then(r => r.json())
+                .then(d => {
+                    if (d.error) {
+                        showToast('❌ ' + d.error, true);
+                    } else {
+                        showToast('✅ ' + d.message);
+                        const stamp = document.getElementById('merge-stamp');
+                        if (stamp) stamp.innerHTML = 'Last merged: ' + new Date().toLocaleString() + ' <span class="status-ok">(success)</span>';
+                        checkPrismcastStatus();
+                    }
+                    btn.disabled = false;
+                    btn.textContent = '🔀 Merge into PrismCast';
+                })
+                .catch(e => {
+                    showToast('❌ ' + e, true);
+                    btn.disabled = false;
+                    btn.textContent = '🔀 Merge into PrismCast';
+                });
+        }
+
+        function checkPrismcastStatus() {
+            const dot = document.getElementById('pc-status-dot');
+            const txt = document.getElementById('pc-status-text');
+            if (!dot || !txt) return;
+            dot.className = 'status-dot checking';
+            txt.textContent = 'Checking PrismCast...';
+            fetch('/api/prismcast/status')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.reachable) {
+                        dot.className = 'status-dot ok';
+                        txt.textContent = `PrismCast reachable — ${d.channel_count} channels`;
+                    } else {
+                        dot.className = 'status-dot err';
+                        txt.textContent = `PrismCast unreachable: ${d.reason}`;
+                    }
+                })
+                .catch(() => {
+                    dot.className = 'status-dot err';
+                    txt.textContent = 'PrismCast unreachable';
+                });
+        }
+
         function clearOutputs() {
             if (!confirm('Delete all generated output files (EPG, M3U, etc.)?\n\nYou\'ll need to run a refresh to regenerate them.')) return;
             fetch('/api/clear-outputs', { method: 'POST' })
@@ -211,11 +305,12 @@
                 .catch(e => alert('Error: ' + e));
         }
 
-        function showToast(msg) {
+        function showToast(msg, isError = false) {
             const toast = document.getElementById('toast');
             toast.textContent = msg;
+            toast.className = isError ? 'toast err' : 'toast';
             toast.style.display = 'block';
-            setTimeout(() => toast.style.display = 'none', 2500);
+            setTimeout(() => toast.style.display = 'none', isError ? 4000 : 2500);
         }
 
         function pollStatus() {
@@ -238,16 +333,17 @@
             });
         }
 
-        // Auto-load logs on page load
+        // Auto-load logs and check PrismCast status on page load
         loadLogs();
+        checkPrismcastStatus();
 
-        // Auto-refresh logs if running
+        // Auto-refresh logs every 10s, PrismCast status every 30s
+        setInterval(loadLogs, 10000);
+        setInterval(checkPrismcastStatus, 30000);
+
         {% if refresh_running %}
         pollStatus();
         {% endif %}
-
-        // Refresh logs every 10 seconds
-        setInterval(loadLogs, 10000);
     </script>
 </body>
 </html>
