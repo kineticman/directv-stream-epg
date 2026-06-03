@@ -91,19 +91,18 @@ def cookies_from_context(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
-def get_client_context_from_template(ctx: Dict[str, Any]) -> str:
+def get_client_context_from_template(ctx: Dict[str, Any]) -> Optional[str]:
     tpl = ctx.get("request_template")
     if not isinstance(tpl, dict):
-        raise ValueError("auth_context.json missing request_template")
+        return None
     params = tpl.get("params")
     if not isinstance(params, dict):
-        raise ValueError("auth_context.json request_template.params missing/invalid")
-    # Seen in your captured URL as "clientContext"
+        return None
     cc = params.get("clientContext") or params.get("clientcontext")
     if isinstance(cc, list) and cc:
         cc = cc[0]
     if not isinstance(cc, str) or not cc.strip():
-        raise ValueError("auth_context.json request_template.params missing clientContext")
+        return None
     return cc.strip()
 
 
@@ -328,19 +327,20 @@ def main() -> int:
     bearer = bearer_from_context(ctx)
     cookies_list = cookies_from_context(ctx)
     client_context = get_client_context_from_template(ctx)
+    if client_context is None:
+        warn("clientContext missing from auth_context.json — proceeding without it (CDP capture may have fallen back to storage; re-run capture_auth_context.py if fetch fails)")
 
     sess = build_session(bearer, cookies_list, args.user_agent)
 
     # IMPORTANT:
     # captured HAR used sort=OrdCh%253DASC (double-encoded '=')
     # if we set sort="OrdCh%3DASC", requests will encode '%' -> '%25' producing OrdCh%253DASC
-    params = {
-        "sort": args.sort,
-        "clientContext": client_context,
-    }
+    params: Dict[str, str] = {"sort": args.sort}
+    if client_context:
+        params["clientContext"] = client_context
 
     log(f"Fetching AllChannels: {ALLCHANNELS_URL}")
-    log(f"Params: sort={params['sort']} clientContext=(len {len(client_context)})")
+    log(f"Params: sort={params['sort']}" + (f" clientContext=(len {len(client_context)})" if client_context else " clientContext=(absent)"))
 
     j = safe_get_json(
         sess=sess,

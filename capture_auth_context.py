@@ -494,7 +494,10 @@ def _build_auth_from_token(token: str, driver) -> dict:
             "netloc": "api.cld.dtvce.com",
             "path": "/discovery/metadata/channel/v5/service/allchannels",
             "url": "https://api.cld.dtvce.com/discovery/metadata/channel/v5/service/allchannels",
-            "params": {"sort": "OrdCh%3DASC"},
+            # clientContext is not available via the storage fallback path (no network URL was
+            # captured). fetch_allchannels_map.py will proceed without it and warn.
+            # Re-run with CDP (Chrome, non-Firefox) to capture a full request_template.
+            "params": {"sort": "OrdCh=ASC"},
         },
     }
 
